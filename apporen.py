@@ -20,8 +20,9 @@ import google.generativeai as genai
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By  # Wajib untuk metode baru
 from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.core.os_manager import ChromeType # Wajib import ini
+from webdriver_manager.core.os_manager import ChromeType # Wajib untuk fix error versi
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Shopee Video Creator", page_icon="🛍️", layout="wide")
@@ -53,10 +54,9 @@ with st.sidebar:
 st.title("🛍️ Shopee Video Generator: Pro Style")
 st.markdown("Ubah **Judul Produk** menjadi video promosi estetik (Blur Background & Zoom).")
 
-# --- 1. FUNGSI SCRAPER (DIPERBAIKI UNTUK CHROMIUM 145) ---
+# --- 1. FUNGSI SCRAPER (VERSI AGRESIF: SCROLL & DOM TRAVERSAL) ---
 def scrape_shopee_complete(url):
     chrome_options = Options()
-    # Gunakan headless=new untuk kompatibilitas cloud terbaru
     chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
@@ -69,44 +69,71 @@ def scrape_shopee_complete(url):
     error_message = None
 
     try:
-        # --- PERBAIKAN UTAMA DI SINI ---
-        # Kita pakai ChromeType.CHROMIUM agar cocok dengan versi 145 di server
+        # --- FIX UTAMA: PAKAI DRIVER CHROMIUM ---
         service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
-        st.toast("🕵️ Sedang membaca halaman produk...")
+        st.toast("🕵️ Membuka halaman produk...")
         driver.get(url)
-        time.sleep(3) 
         
-        page_source = driver.page_source
+        # --- TEKNIK SCROLLING (WAJIB UTK SHOPEE) ---
+        # Scroll ke bawah beberapa kali agar gambar loading
+        st.toast("⬇️ Sedang scroll halaman...")
+        for _ in range(4):
+            driver.execute_script("window.scrollBy(0, 700);")
+            time.sleep(1.5) # Beri waktu loading
 
-        # AMBIL JUDUL
+        # --- AMBIL JUDUL ---
         try:
             clean_url = url.split('?')[0]
             slug = clean_url.split('/')[-1]
             slug_clean = re.sub(r'\.i\.\d+\.\d+$', '', slug)
             final_title = slug_clean.replace('-', ' ')
-            data["title"] = final_title if final_title else "Produk Shopee Tanpa Nama"
-        except Exception as e:
-            data["title"] = "Gagal mengambil judul dari URL"
+            data["title"] = final_title if final_title else "Produk Shopee"
+        except:
+            data["title"] = "Produk Tanpa Nama"
 
-        # AMBIL GAMBAR
-        ids_found = []
-        match = re.search(r'"images":\s*\[(.*?)\]', page_source)
-        if match:
-            content = match.group(1)
-            ids_found = [x.strip('"').strip("'") for x in content.split(',')]
+        # --- AMBIL GAMBAR (METODE DOM TRAVERSAL) ---
+        found_urls = set()
         
-        if not ids_found:
+        # Cara A: Cari tag <img> biasa
+        try:
+            images = driver.find_elements(By.TAG_NAME, "img")
+            for img in images:
+                src = img.get_attribute("src")
+                if src and ("cf.shopee" in src or "susercontent" in src):
+                    if "_tn" not in src: # Filter thumbnail kecil
+                        found_urls.add(src)
+        except: pass
+
+        # Cara B: Cari elemen dengan Background Image (Shopee sering pakai ini)
+        try:
+            divs = driver.find_elements(By.CSS_SELECTOR, "div[style*='background-image']")
+            for div in divs:
+                style = div.get_attribute("style")
+                url_match = re.search(r'url\s*\(\s*["\']?(.*?)["\']?\s*\)', style)
+                if url_match:
+                    bg_url = url_match.group(1)
+                    if "cf.shopee" in bg_url or "susercontent" in bg_url:
+                        hd_url = bg_url.replace("_tn", "") 
+                        found_urls.add(hd_url)
+        except: pass
+
+        # Cara C: Fallback Regex (Jaga-jaga DOM gagal)
+        if len(found_urls) == 0:
+            page_source = driver.page_source
             potential_ids = re.findall(r'[a-f0-9]{32}', page_source)
-            ids_found = list(set(potential_ids))
+            for pid in list(set(potential_ids)):
+                 found_urls.add(f"https://down-id.img.susercontent.com/file/{pid}")
 
-        base_url = "https://down-id.img.susercontent.com/file/"
-        for img_id in ids_found:
-            if len(img_id) > 20 and " " not in img_id: 
-                data["images"].append(f"{base_url}{img_id}")
-        
-        data["images"] = list(set(data["images"]))
+        # --- FINALISASI ---
+        valid_images = []
+        for img_url in found_urls:
+            # Filter URL valid (panjang & bukan icon svg)
+            if len(img_url) > 20 and "svg" not in img_url and "data:image" not in img_url:
+                valid_images.append(img_url)
+
+        data["images"] = list(set(valid_images)) # Hapus duplikat
 
     except Exception as e:
         error_message = f"Error Selenium: {str(e)}"
@@ -156,8 +183,7 @@ def add_text_to_image(cv2_img, text):
     draw = ImageDraw.Draw(img_pil)
     w, h = img_pil.size
     
-    # --- PENGATURAN UKURAN FONT ---
-    # 0.03 agar kecil tapi terbaca
+    # Ukuran font proporsional (0.03 = Kecil tapi terbaca)
     fontsize = int(h * 0.03) 
     
     try:
@@ -165,7 +191,7 @@ def add_text_to_image(cv2_img, text):
     except:
         font = ImageFont.load_default()
 
-    # --- WORD WRAPPING ---
+    # Word Wrapping
     max_width = w * 0.85 
     words = text.split()
     lines, current_line = [], []
@@ -179,23 +205,17 @@ def add_text_to_image(cv2_img, text):
     lines.append(" ".join(current_line))
     final_text = "\n".join(lines)
 
-    # Hitung ukuran total teks
+    # Posisi Teks
     bbox_multiline = draw.multiline_textbbox((0, 0), final_text, font=font, align='center', spacing=10)
     text_w = bbox_multiline[2] - bbox_multiline[0]
     
-    # --- PENGATURAN POSISI TEKS ---
-    # Posisi Horizontal: Center
     pos_x = (w - text_w) // 2
-    
-    # Posisi Vertikal: 55% dari atas (Sedikit di bawah tengah, tidak mepet bawah)
-    pos_y = int(h * 0.55) 
+    pos_y = int(h * 0.55) # Posisi agak naik (tengah-bawah)
 
-    # --- EFEK TEXT ---
+    # Efek Shadow & Outline
     shadow_offset = 3
-    # Shadow
     draw.multiline_text((pos_x + shadow_offset, pos_y + shadow_offset), final_text, font=font, fill=(0,0,0, 160), align='center', spacing=10)
     
-    # Text Utama (Putih Outline Hitam)
     draw.multiline_text(
         (pos_x, pos_y), 
         final_text, 
@@ -229,7 +249,6 @@ def create_single_clip(img_url, text_narration, index):
         y_bg = (bg_h - th) // 2
         background_base = img_bg_resized[y_bg:y_bg+th, x_bg:x_bg+tw]
         
-        # Blur & Darken
         background_base = cv2.GaussianBlur(background_base, (99, 99), 0)
         background_base = cv2.addWeighted(background_base, 0.6, np.zeros_like(background_base), 0.4, -20)
         
@@ -252,7 +271,6 @@ def create_single_clip(img_url, text_narration, index):
         out = cv2.VideoWriter(tmp_v, cv2.VideoWriter_fourcc(*'mp4v'), fps, (tw, th))
         
         # --- ZOOM LOGIC ---
-        # Produk fit di tengah (85% lebar layar)
         target_product_w = int(tw * 0.85) 
         scale_prod = target_product_w / w_orig
         prod_w, prod_h = int(w_orig * scale_prod), int(h_orig * scale_prod)
@@ -269,7 +287,7 @@ def create_single_clip(img_url, text_narration, index):
             img_zoomed = cv2.resize(img_product_static, (curr_w, curr_h))
             
             # Center Positioning
-            y_offset = (th - curr_h) // 2 - 50 # Naikkan sedikit
+            y_offset = (th - curr_h) // 2 - 50 
             x_offset = (tw - curr_w) // 2
             
             # Overlay Logic
@@ -310,8 +328,9 @@ if st.button("🚀 PROSES PRODUK", type="primary"):
         if data and data['images']:
             st.session_state.shopee_data = data
             st.session_state.generated_script = None
-            st.success("Data Berhasil Diambil!")
-        else: st.error(f"Gagal: {err}")
+            st.success(f"Berhasil mengambil {len(data['images'])} gambar!")
+        else: 
+            st.error(f"Gagal mengambil gambar. Pastikan link benar atau coba link produk lain. Error: {err}")
 
 # --- EDITOR ---
 if st.session_state.shopee_data:
