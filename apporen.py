@@ -33,10 +33,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- SIDEBAR ---
+# --- SIDEBAR (UPDATE INI SAJA) ---
 with st.sidebar:
     st.header("⚙️ Pengaturan")
-    api_key = st.text_input("Gemini API Key", type="password", help="Wajib diisi agar naskah dibuat otomatis oleh AI.")
+    
+    # Cek apakah ada API Key di Secrets (Server)
+    if "GEMINI_API_KEY" in st.secrets:
+        api_key = st.secrets["GEMINI_API_KEY"]
+        st.success("Status: API Key Terhubung ✅")
+    else:
+        # Jika lupa setting secrets, kotak input akan muncul sebagai cadangan
+        api_key = st.text_input("Gemini API Key", type="password", help="Masukkan API Key Gemini Anda")
+
     st.caption("Tanpa API Key, sistem akan menggunakan template manual dari Judul Produk.")
     st.markdown("---")
     st.info("Tips: Gunakan link produk Shopee yang gambarnya jelas.")
@@ -365,3 +373,4 @@ if st.session_state.shopee_data:
                 if os.path.exists(c): os.remove(c)
             if os.path.exists("list.txt"): os.remove("list.txt")
             st_status.text("Selesai!")
+
