@@ -21,7 +21,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.core.os_manager import ChromeType
+from webdriver_manager.core.os_manager import ChromeType # Wajib import ini
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Shopee Video Creator", page_icon="🛍️", layout="wide")
@@ -53,7 +53,7 @@ with st.sidebar:
 st.title("🛍️ Shopee Video Generator: Pro Style")
 st.markdown("Ubah **Judul Produk** menjadi video promosi estetik (Blur Background & Zoom).")
 
-# --- 1. FUNGSI SCRAPER (UPDATED: FIX CHROME VERSION) ---
+# --- 1. FUNGSI SCRAPER (DIPERBAIKI UNTUK CHROMIUM 145) ---
 def scrape_shopee_complete(url):
     chrome_options = Options()
     # Gunakan headless=new untuk kompatibilitas cloud terbaru
@@ -69,8 +69,8 @@ def scrape_shopee_complete(url):
     error_message = None
 
     try:
-        # --- FIX: Gunakan ChromeType.CHROMIUM ---
-        # Ini akan mencari binary Chromium yang terinstal di server Linux (Streamlit Cloud)
+        # --- PERBAIKAN UTAMA DI SINI ---
+        # Kita pakai ChromeType.CHROMIUM agar cocok dengan versi 145 di server
         service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
