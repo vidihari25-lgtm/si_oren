@@ -12,7 +12,7 @@ import random
 import edge_tts 
 import imageio_ffmpeg
 from PIL import Image, ImageDraw, ImageFont
-from io import BytesIO
+from io import BytesIO # Wajib untuk cek ukuran gambar
 
 # --- IMPORT AI ---
 import google.generativeai as genai
@@ -46,25 +46,29 @@ with st.sidebar:
 
     st.caption("Tanpa API Key, sistem akan menggunakan template manual.")
     st.markdown("---")
-    st.info("💡 Jika masih gagal, gunakan fitur **Upload Manual**.")
+    st.info("💡 Gunakan **Upload Manual** jika Shopee memblokir IP server.")
 
-st.title("🛍️ Shopee Video Generator: Smart Filter")
-st.markdown("Otomatis membuang logo bank/kurir berdasarkan **Ukuran Gambar**.")
+st.title("🛍️ Shopee Video Generator: Anti-Logo")
+st.markdown("Hanya mengambil gambar **Produk Asli** (Logo Bank/Kurir otomatis dibuang).")
 
-# --- FUNGSI CEK UKURAN GAMBAR (VALIDATOR) ---
-def is_big_image(url):
+# --- FUNGSI VALIDASI GAMBAR (FILTER UKURAN) ---
+def is_valid_product_image(url):
     try:
-        # Download header gambar saja (cepat)
-        response = requests.get(url, timeout=5)
+        # Filter URL kasar dulu
+        if "svg" in url or "data:image" in url or "icon" in url:
+            return False
+            
+        # Download header gambar (cepat)
+        response = requests.get(url, timeout=3)
         img = Image.open(BytesIO(response.content))
         w, h = img.size
         
         # ATURAN FILTER:
-        # 1. Harus lebih besar dari 300x300 pixel (Logo biasanya < 100px)
-        # 2. Aspek rasio harus mendekati kotak (Produk shopee biasanya 1:1)
+        # 1. Gambar harus lebih besar dari 300 pixel (Logo biasanya cuma 50-100px)
+        # 2. Gambar Shopee loading (tas oren) rasionya biasanya landscape aneh, produk biasanya kotak
         
         if w < 300 or h < 300:
-            return False # Terlalu kecil (pasti logo/icon)
+            return False # Terlalu kecil (Logo Bank/Kurir)
             
         return True
     except:
@@ -73,12 +77,14 @@ def is_big_image(url):
 # --- 1. FUNGSI SCRAPER ---
 def scrape_shopee_complete(url):
     chrome_options = Options()
+    # Settingan WAJIB untuk Streamlit Cloud agar tidak error version
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
+    # KUNCI UTAMA: Tembak driver server langsung
     chrome_options.binary_location = "/usr/bin/chromium"
     
     driver = None
@@ -86,19 +92,21 @@ def scrape_shopee_complete(url):
     error_message = None
 
     try:
+        # KUNCI UTAMA: Jangan pakai webdriver-manager
         service = Service("/usr/bin/chromedriver")
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
-        st.toast("🕵️ Mengakses Shopee...")
+        st.toast("🕵️ Membuka Shopee...")
         driver.get(url)
         time.sleep(2) 
         
-        # --- SCROLLING AGRESIF (7x) ---
-        st.toast("⬇️ Mencari gambar resolusi tinggi...")
-        for _ in range(7):
-            driver.execute_script("window.scrollBy(0, 500);")
-            time.sleep(1)
-        driver.execute_script("window.scrollTo(0, 0);") # Balik ke atas buat gambar utama
+        # --- SCROLLING BOLAK-BALIK (Pancing Lazy Load) ---
+        st.toast("⬇️ Memancing gambar keluar...")
+        driver.execute_script("window.scrollTo(0, 1000);") # Turun
+        time.sleep(1)
+        driver.execute_script("window.scrollTo(0, 2000);") # Turun lagi
+        time.sleep(1)
+        driver.execute_script("window.scrollTo(0, 0);")    # Naik ke atas (biasanya gambar utama di atas)
         time.sleep(2)
 
         # --- AMBIL JUDUL ---
@@ -111,10 +119,10 @@ def scrape_shopee_complete(url):
         except:
             data["title"] = "Produk Tanpa Nama"
 
-        # --- KUMPULKAN URL ---
+        # --- CARI GAMBAR ---
         found_urls = set()
         
-        # 1. Cari Background Images (Cara paling ampuh buat Shopee)
+        # Prioritas 1: Cari di Background Image (Galeri Shopee biasanya di sini)
         try:
             elements = driver.find_elements(By.XPATH, "//*[contains(@style, 'background-image')]")
             for el in elements:
@@ -123,11 +131,11 @@ def scrape_shopee_complete(url):
                 if url_match:
                     bg_url = url_match.group(1)
                     if "cf.shopee" in bg_url or "susercontent" in bg_url:
-                        clean_url = bg_url.replace("_tn", "") # Hapus tanda thumbnail
+                        clean_url = bg_url.replace("_tn", "") # Hapus _tn (thumbnail)
                         found_urls.add(clean_url)
         except: pass
 
-        # 2. Cari Tag IMG biasa
+        # Prioritas 2: Cari IMG tag biasa
         try:
             images = driver.find_elements(By.TAG_NAME, "img")
             for img in images:
@@ -138,22 +146,20 @@ def scrape_shopee_complete(url):
         except: pass
 
         # --- FILTERING KETAT (PIXEL CHECK) ---
-        st.toast("🔍 Memfilter logo & ikon sampah...")
+        st.toast("🔍 Membuang logo bank & gambar sampah...")
         valid_images = []
         
-        for img_url in list(found_urls):
-            # Cek string dulu biar cepat
-            if "svg" in img_url or "data:image" in img_url:
-                continue
-                
-            # CEK UKURAN FISIK GAMBAR
-            if is_big_image(img_url):
+        # Kita batasi cek maksimal 15 gambar biar gak lama
+        check_limit = list(found_urls)[:15] 
+        
+        for img_url in check_limit:
+            if is_valid_product_image(img_url):
                 valid_images.append(img_url)
 
         data["images"] = list(set(valid_images))
 
     except Exception as e:
-        error_message = f"Error: {str(e)}"
+        error_message = f"Error System: {str(e)}"
     finally:
         if driver: driver.quit()
             
@@ -343,17 +349,18 @@ if scrape_btn:
         if data and data['images']:
             st.session_state.shopee_data = data
             st.session_state.generated_script = None
-            st.success(f"✅ Berhasil mengambil {len(data['images'])} gambar produk (High Quality)!")
+            st.success(f"✅ Berhasil mengambil {len(data['images'])} gambar produk asli!")
         else: 
-            st.error(f"❌ Gagal mengambil gambar produk. Cobalah opsi Upload Manual di bawah.")
+            st.error(f"❌ Gambar tidak ditemukan atau diblokir Shopee. Gunakan Upload Manual.")
     else:
         st.warning("Masukkan link dulu.")
 
 # --- FITUR UPLOAD MANUAL ---
 st.markdown("---")
-with st.expander("📂 Opsi Cadangan: Upload Gambar Manual", expanded=False):
+with st.expander("📂 Opsi Cadangan: Upload Gambar Manual", expanded=True):
+    st.info("Jika Scraper gagal (gambar Shopee tidak muncul), pakai ini:")
     uploaded_files = st.file_uploader("Upload Gambar Produk", type=['jpg', 'png', 'jpeg'], accept_multiple_files=True)
-    product_name_manual = st.text_input("Nama Produk:", value="Produk Keren")
+    product_name_manual = st.text_input("Nama Produk:", value="Produk Viral")
     
     if uploaded_files:
         if st.button("Gunakan Gambar Upload"):
