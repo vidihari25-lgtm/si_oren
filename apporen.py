@@ -45,56 +45,47 @@ with st.sidebar:
 
     st.caption("Tanpa API Key, sistem akan menggunakan template manual.")
     st.markdown("---")
-    st.info("💡 Jika Scraper gagal (kena blokir Shopee), gunakan fitur **Upload Gambar Manual** di bawah tombol proses.")
+    st.info("💡 Jika Scraper gagal, gunakan fitur **Upload Gambar Manual**.")
 
-st.title("🛍️ Shopee Video Generator: Pro Style")
-st.markdown("Ubah **Judul Produk** menjadi video promosi estetik (Blur Background & Zoom).")
+st.title("🛍️ Shopee Video Generator: Anti-Logo")
+st.markdown("Otomatis memfilter logo bank/kurir dan mengambil gambar produk asli.")
 
-# --- 1. FUNGSI SCRAPER (DENGAN DEBUG SCREENSHOT) ---
+# --- 1. FUNGSI SCRAPER (SMART FILTER) ---
 def scrape_shopee_complete(url):
     chrome_options = Options()
-    # Opsi wajib untuk Cloud
+    # Setting wajib Streamlit Cloud
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
+    # Anti-detect
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
-    # --- ANTI-BOT TRICKS ---
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option('useAutomationExtension', False)
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-    
-    # Lokasi Binary (Wajib jika pakai packages.txt: chromium, chromium-driver)
-    chrome_options.binary_location = "/usr/bin/chromium" 
+    # LOKASI BINARY SYSTEM (PENTING BUAT FIX ERROR VERSI)
+    chrome_options.binary_location = "/usr/bin/chromium"
     
     driver = None
     data = {"images": [], "title": "", "description": []}
     error_message = None
 
     try:
+        # GUNAKAN DRIVER SYSTEM, BUKAN WEBDRIVER MANAGER
         service = Service("/usr/bin/chromedriver")
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
-        # Bypass detection
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": """
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                })
-            """
-        })
-        
         st.toast("🕵️ Mengakses Shopee...")
         driver.get(url)
-        time.sleep(2) # Tunggu redirect jika ada
+        time.sleep(2) 
         
-        # --- TEKNIK SCROLLING ---
-        st.toast("⬇️ Sedang mencari gambar...")
-        for _ in range(4):
-            driver.execute_script("window.scrollBy(0, 700);")
-            time.sleep(1) 
+        # --- SCROLLING AGRESIF AGAR PRODUK LOADING ---
+        st.toast("⬇️ Sedang mencari gambar produk...")
+        for _ in range(5):
+            driver.execute_script("window.scrollBy(0, 500);")
+            time.sleep(1)
+        # Scroll balik ke atas jaga-jaga
+        driver.execute_script("window.scrollTo(0, 0);")
+        time.sleep(1)
 
         # --- AMBIL JUDUL ---
         try:
@@ -106,20 +97,35 @@ def scrape_shopee_complete(url):
         except:
             data["title"] = "Produk Tanpa Nama"
 
-        # --- AMBIL GAMBAR (DOM TRAVERSAL) ---
+        # --- AMBIL GAMBAR DENGAN FILTER LOGO ---
         found_urls = set()
         
+        # Daftar kata kunci sampah (Logo Bank, Kurir, dll)
+        BLACKLIST_KEYWORDS = [
+            "bank", "bni", "bca", "bri", "mandiri", "cimb", 
+            "jne", "jnt", "sicepat", "anteraja", "shopeepay", 
+            "logo", "icon", "qr", "code", "linkedin", "facebook", 
+            "twitter", "google", "playstore", "appstore"
+        ]
+
         # Cara A: Tag IMG
         try:
             images = driver.find_elements(By.TAG_NAME, "img")
             for img in images:
                 src = img.get_attribute("src")
                 if src and ("cf.shopee" in src or "susercontent" in src):
-                    if "_tn" not in src: 
-                        found_urls.add(src)
+                    # Filter URL Sampah
+                    src_lower = src.lower()
+                    if any(bad_word in src_lower for bad_word in BLACKLIST_KEYWORDS):
+                        continue
+                    # Filter Thumbnail kecil
+                    if "_tn" in src or "width=20" in src:
+                        continue
+                        
+                    found_urls.add(src)
         except: pass
 
-        # Cara B: Background Image
+        # Cara B: Background Image (Biasanya ini gambar produk utama Shopee)
         try:
             divs = driver.find_elements(By.CSS_SELECTOR, "div[style*='background-image']")
             for div in divs:
@@ -128,18 +134,22 @@ def scrape_shopee_complete(url):
                 if url_match:
                     bg_url = url_match.group(1)
                     if "cf.shopee" in bg_url or "susercontent" in bg_url:
-                        hd_url = bg_url.replace("_tn", "") 
+                        hd_url = bg_url.replace("_tn", "")
+                        
+                        # Filter URL Sampah
+                        if any(bad_word in hd_url.lower() for bad_word in BLACKLIST_KEYWORDS):
+                            continue
+                            
                         found_urls.add(hd_url)
         except: pass
 
-        # --- DEBUG: JIKA KOSONG, AMBIL SCREENSHOT ---
-        if len(found_urls) == 0:
-            driver.save_screenshot("debug_shopee.png")
-            
-        # Filter Valid Images
+        # Filter Lanjutan: Cek Ukuran Gambar (Optional tapi bagus)
+        # Kita hanya simpan URL, nanti saat render baru diproses
+        
         valid_images = []
         for img_url in found_urls:
-            if len(img_url) > 20 and "svg" not in img_url and "data:image" not in img_url:
+            # Filter ganda: URL harus panjang (bukan icon pendek) & tidak mengandung svg
+            if len(img_url) > 25 and ".svg" not in img_url and "data:image" not in img_url:
                 valid_images.append(img_url)
 
         data["images"] = list(set(valid_images))
@@ -233,17 +243,14 @@ def add_text_to_image(cv2_img, text):
     
     return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
-# --- 5. RENDER ENGINE (ZOOM & BLUR) ---
+# --- 5. RENDER ENGINE ---
 def create_single_clip(img_data, text_narration, index, is_upload=False):
     try:
-        # Load Image (From URL or Upload)
         if is_upload:
-            # Convert uploaded file (bytes) to cv2
             file_bytes = np.asarray(bytearray(img_data.read()), dtype=np.uint8)
             img_original = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-            img_data.seek(0) # Reset pointer
+            img_data.seek(0)
         else:
-            # From URL
             res = requests.get(img_data)
             img_original = cv2.imdecode(np.frombuffer(res.content, np.uint8), cv2.IMREAD_COLOR)
             
@@ -338,33 +345,28 @@ if scrape_btn:
         if data and data['images']:
             st.session_state.shopee_data = data
             st.session_state.generated_script = None
-            st.success(f"✅ Berhasil mengambil {len(data['images'])} gambar!")
+            st.success(f"✅ Berhasil mengambil {len(data['images'])} gambar produk (Logo dibuang)!")
         else: 
-            st.error(f"❌ Gagal mengambil gambar. Shopee memblokir akses.")
-            # Debugging: Tampilkan screenshot jika ada
-            if os.path.exists("debug_shopee.png"):
-                st.warning("Ini tampilan yang dilihat bot (kemungkinan Login/Captcha):")
-                st.image("debug_shopee.png", caption="Screenshot Debugging", width=400)
+            st.error(f"❌ Gagal mengambil gambar produk. Cobalah opsi Upload Manual di bawah.")
     else:
         st.warning("Masukkan link dulu.")
 
-# --- FITUR UPLOAD MANUAL (FALLBACK) ---
+# --- FITUR UPLOAD MANUAL ---
 st.markdown("---")
-with st.expander("📂 Link Gagal? Upload Gambar Manual Di Sini (Klik untuk buka)", expanded=False):
-    st.info("Gunakan opsi ini jika Scraper Shopee gagal mengambil gambar.")
+with st.expander("📂 Opsi Cadangan: Upload Gambar Manual", expanded=False):
     uploaded_files = st.file_uploader("Upload Gambar Produk", type=['jpg', 'png', 'jpeg'], accept_multiple_files=True)
-    product_name_manual = st.text_input("Nama Produk (untuk Naskah AI):", value="Produk Viral")
+    product_name_manual = st.text_input("Nama Produk:", value="Produk Keren")
     
     if uploaded_files:
         if st.button("Gunakan Gambar Upload"):
             st.session_state.shopee_data = {
                 "title": product_name_manual,
-                "images": uploaded_files, # Simpan objek file langsung
+                "images": uploaded_files, 
                 "description": ""
             }
             st.session_state.is_manual_upload = True
             st.session_state.generated_script = None
-            st.success("✅ Gambar manual berhasil dimuat! Scroll ke bawah.")
+            st.success("✅ Gambar manual dimuat!")
 
 # --- EDITOR ---
 if st.session_state.shopee_data:
@@ -386,9 +388,12 @@ if st.session_state.shopee_data:
     
     for i in range(limit):
         with cols[i%3]:
-            # Tampilkan Gambar (Beda cara handling URL vs Upload)
             img_source = images_list[i]
-            st.image(img_source, use_container_width=True)
+            # Handle display image based on type (URL string vs UploadedFile object)
+            if isinstance(img_source, str):
+                st.image(img_source, use_container_width=True)
+            else:
+                st.image(img_source, use_container_width=True)
             
             txt = st.text_area(f"Narasi {i+1}", value=st.session_state.generated_script[i] if i < len(st.session_state.generated_script) else "Cek sekarang!", key=f"v_{i}")
             inputs.append({"img_source": img_source, "text": txt})
@@ -400,15 +405,12 @@ if st.session_state.shopee_data:
         
         for i, item in enumerate(inputs):
             st_status.text(f"Merender slide {i+1} dari {len(inputs)}...")
-            
-            # Panggil fungsi render dengan flag is_manual_upload
             c = create_single_clip(
                 item['img_source'], 
                 item['text'], 
                 i, 
                 is_upload=st.session_state.is_manual_upload
             )
-            
             if c: clips.append(c)
             progress.progress((i+1)/len(inputs))
         
