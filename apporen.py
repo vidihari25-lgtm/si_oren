@@ -20,9 +20,7 @@ import google.generativeai as genai
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By  # Wajib untuk metode baru
-from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.core.os_manager import ChromeType # Wajib untuk fix error versi
+from selenium.webdriver.common.by import By 
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Shopee Video Creator", page_icon="🛍️", layout="wide")
@@ -38,13 +36,10 @@ st.markdown("""
 # --- SIDEBAR (Auto-Detect API Key) ---
 with st.sidebar:
     st.header("⚙️ Pengaturan")
-    
-    # Cek apakah ada API Key di Secrets (Server)
     if "GEMINI_API_KEY" in st.secrets:
         api_key = st.secrets["GEMINI_API_KEY"]
         st.success("Status: API Key Terhubung ✅")
     else:
-        # Jika tidak ada di secrets, minta input manual
         api_key = st.text_input("Gemini API Key", type="password", help="Masukkan API Key Gemini Anda")
 
     st.caption("Tanpa API Key, sistem akan menggunakan template manual dari Judul Produk.")
@@ -54,34 +49,38 @@ with st.sidebar:
 st.title("🛍️ Shopee Video Generator: Pro Style")
 st.markdown("Ubah **Judul Produk** menjadi video promosi estetik (Blur Background & Zoom).")
 
-# --- 1. FUNGSI SCRAPER (VERSI AGRESIF: SCROLL & DOM TRAVERSAL) ---
+# --- 1. FUNGSI SCRAPER (VERSI DIRECT SYSTEM PATH) ---
 def scrape_shopee_complete(url):
     chrome_options = Options()
-    chrome_options.add_argument("--headless=new") 
+    # Opsi wajib untuk Streamlit Cloud
+    chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
+    # KUNCI SUKSES: Tembak langsung lokasi Chromium di Server Linux
+    chrome_options.binary_location = "/usr/bin/chromium" 
     
     driver = None
     data = {"images": [], "title": "", "description": []}
     error_message = None
 
     try:
-        # --- FIX UTAMA: PAKAI DRIVER CHROMIUM ---
-        service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
+        # KUNCI SUKSES: Tembak langsung lokasi Driver di Server Linux
+        # Kita tidak pakai webdriver-manager lagi biar tidak error version mismatch
+        service = Service("/usr/bin/chromedriver")
+        
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
         st.toast("🕵️ Membuka halaman produk...")
         driver.get(url)
         
-        # --- TEKNIK SCROLLING (WAJIB UTK SHOPEE) ---
-        # Scroll ke bawah beberapa kali agar gambar loading
+        # --- TEKNIK SCROLLING ---
         st.toast("⬇️ Sedang scroll halaman...")
         for _ in range(4):
             driver.execute_script("window.scrollBy(0, 700);")
-            time.sleep(1.5) # Beri waktu loading
+            time.sleep(1.5) 
 
         # --- AMBIL JUDUL ---
         try:
@@ -93,20 +92,20 @@ def scrape_shopee_complete(url):
         except:
             data["title"] = "Produk Tanpa Nama"
 
-        # --- AMBIL GAMBAR (METODE DOM TRAVERSAL) ---
+        # --- AMBIL GAMBAR (DOM TRAVERSAL) ---
         found_urls = set()
         
-        # Cara A: Cari tag <img> biasa
+        # Cara A: Tag IMG
         try:
             images = driver.find_elements(By.TAG_NAME, "img")
             for img in images:
                 src = img.get_attribute("src")
                 if src and ("cf.shopee" in src or "susercontent" in src):
-                    if "_tn" not in src: # Filter thumbnail kecil
+                    if "_tn" not in src: 
                         found_urls.add(src)
         except: pass
 
-        # Cara B: Cari elemen dengan Background Image (Shopee sering pakai ini)
+        # Cara B: Background Image DIV
         try:
             divs = driver.find_elements(By.CSS_SELECTOR, "div[style*='background-image']")
             for div in divs:
@@ -119,7 +118,7 @@ def scrape_shopee_complete(url):
                         found_urls.add(hd_url)
         except: pass
 
-        # Cara C: Fallback Regex (Jaga-jaga DOM gagal)
+        # Cara C: Fallback Regex
         if len(found_urls) == 0:
             page_source = driver.page_source
             potential_ids = re.findall(r'[a-f0-9]{32}', page_source)
@@ -129,11 +128,10 @@ def scrape_shopee_complete(url):
         # --- FINALISASI ---
         valid_images = []
         for img_url in found_urls:
-            # Filter URL valid (panjang & bukan icon svg)
             if len(img_url) > 20 and "svg" not in img_url and "data:image" not in img_url:
                 valid_images.append(img_url)
 
-        data["images"] = list(set(valid_images)) # Hapus duplikat
+        data["images"] = list(set(valid_images))
 
     except Exception as e:
         error_message = f"Error Selenium: {str(e)}"
@@ -177,21 +175,18 @@ def get_audio_gadis(text, index):
     except:
         return None
 
-# --- 4. TEXT OVERLAY (FONT KECIL & POSISI NAIK) ---
+# --- 4. TEXT OVERLAY ---
 def add_text_to_image(cv2_img, text):
     img_pil = Image.fromarray(cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(img_pil)
     w, h = img_pil.size
     
-    # Ukuran font proporsional (0.03 = Kecil tapi terbaca)
     fontsize = int(h * 0.03) 
-    
     try:
         font = ImageFont.truetype("arialbd.ttf", fontsize)
     except:
         font = ImageFont.load_default()
 
-    # Word Wrapping
     max_width = w * 0.85 
     words = text.split()
     lines, current_line = [], []
@@ -205,14 +200,12 @@ def add_text_to_image(cv2_img, text):
     lines.append(" ".join(current_line))
     final_text = "\n".join(lines)
 
-    # Posisi Teks
     bbox_multiline = draw.multiline_textbbox((0, 0), final_text, font=font, align='center', spacing=10)
     text_w = bbox_multiline[2] - bbox_multiline[0]
     
     pos_x = (w - text_w) // 2
-    pos_y = int(h * 0.55) # Posisi agak naik (tengah-bawah)
+    pos_y = int(h * 0.55) 
 
-    # Efek Shadow & Outline
     shadow_offset = 3
     draw.multiline_text((pos_x + shadow_offset, pos_y + shadow_offset), final_text, font=font, fill=(0,0,0, 160), align='center', spacing=10)
     
@@ -229,17 +222,13 @@ def add_text_to_image(cv2_img, text):
     
     return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
-# --- 5. RENDER ENGINE (BLURRED BG + ZOOM) ---
+# --- 5. RENDER ENGINE ---
 def create_single_clip(img_url, text_narration, index):
     try:
-        # Download Image
         res = requests.get(img_url)
         img_original = cv2.imdecode(np.frombuffer(res.content, np.uint8), cv2.IMREAD_COLOR)
-        
-        # Target Resolution
         th, tw = 1920, 1080
         
-        # --- BACKGROUND BLUR ---
         h_orig, w_orig, _ = img_original.shape
         scale_bg = max(tw/w_orig, th/h_orig)
         bg_w, bg_h = int(w_orig * scale_bg), int(h_orig * scale_bg)
@@ -252,7 +241,6 @@ def create_single_clip(img_url, text_narration, index):
         background_base = cv2.GaussianBlur(background_base, (99, 99), 0)
         background_base = cv2.addWeighted(background_base, 0.6, np.zeros_like(background_base), 0.4, -20)
         
-        # --- AUDIO ---
         audio_path = get_audio_gadis(re.sub(r'[^\w\s,.]', '', text_narration), index)
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         res_ff = subprocess.run([ffmpeg, '-i', audio_path, '-hide_banner'], stderr=subprocess.PIPE, text=True)
@@ -270,7 +258,6 @@ def create_single_clip(img_url, text_narration, index):
         tmp_v = f"tmp_{index}.mp4"
         out = cv2.VideoWriter(tmp_v, cv2.VideoWriter_fourcc(*'mp4v'), fps, (tw, th))
         
-        # --- ZOOM LOGIC ---
         target_product_w = int(tw * 0.85) 
         scale_prod = target_product_w / w_orig
         prod_w, prod_h = int(w_orig * scale_prod), int(h_orig * scale_prod)
@@ -278,19 +265,14 @@ def create_single_clip(img_url, text_narration, index):
 
         for i in range(total_frames):
             frame = background_base.copy()
-            
-            # Zoom Factor (1.0 -> 1.08)
             zoom_factor = 1.0 + (0.08 * (i / total_frames))
-            
             curr_w = int(prod_w * zoom_factor)
             curr_h = int(prod_h * zoom_factor)
             img_zoomed = cv2.resize(img_product_static, (curr_w, curr_h))
             
-            # Center Positioning
             y_offset = (th - curr_h) // 2 - 50 
             x_offset = (tw - curr_w) // 2
             
-            # Overlay Logic
             y1, y2 = max(0, y_offset), min(th, y_offset + curr_h)
             x1, x2 = max(0, x_offset), min(tw, x_offset + curr_w)
             sy1, sy2 = max(0, -y_offset), min(curr_h, th - y_offset)
@@ -298,7 +280,7 @@ def create_single_clip(img_url, text_narration, index):
             
             if y2 > y1 and x2 > x1:
                 frame[y1:y2, x1:x2] = img_zoomed[sy1:sy2, sx1:sx2]
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 3) # Border Putih
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 3)
 
             frame = add_text_to_image(frame, text_narration)
             out.write(frame)
@@ -330,9 +312,8 @@ if st.button("🚀 PROSES PRODUK", type="primary"):
             st.session_state.generated_script = None
             st.success(f"Berhasil mengambil {len(data['images'])} gambar!")
         else: 
-            st.error(f"Gagal mengambil gambar. Pastikan link benar atau coba link produk lain. Error: {err}")
+            st.error(f"Gagal: {err}")
 
-# --- EDITOR ---
 if st.session_state.shopee_data:
     data = st.session_state.shopee_data
     limit = min(len(data['images']), 6)
@@ -375,7 +356,6 @@ if st.session_state.shopee_data:
             st.video(final_name)
             st.download_button("Download Sekarang", open(final_name, "rb"), "video.mp4")
             
-            # Cleanup
             for c in clips: 
                 if os.path.exists(c): os.remove(c)
             if os.path.exists("list.txt"): os.remove("list.txt")
