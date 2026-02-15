@@ -12,6 +12,7 @@ import random
 import edge_tts 
 import imageio_ffmpeg
 from PIL import Image, ImageDraw, ImageFont
+from io import BytesIO
 
 # --- IMPORT AI ---
 import google.generativeai as genai
@@ -45,24 +46,39 @@ with st.sidebar:
 
     st.caption("Tanpa API Key, sistem akan menggunakan template manual.")
     st.markdown("---")
-    st.info("💡 Jika Scraper gagal, gunakan fitur **Upload Gambar Manual**.")
+    st.info("💡 Jika masih gagal, gunakan fitur **Upload Manual**.")
 
-st.title("🛍️ Shopee Video Generator: Anti-Logo")
-st.markdown("Otomatis memfilter logo bank/kurir dan mengambil gambar produk asli.")
+st.title("🛍️ Shopee Video Generator: Smart Filter")
+st.markdown("Otomatis membuang logo bank/kurir berdasarkan **Ukuran Gambar**.")
 
-# --- 1. FUNGSI SCRAPER (SMART FILTER) ---
+# --- FUNGSI CEK UKURAN GAMBAR (VALIDATOR) ---
+def is_big_image(url):
+    try:
+        # Download header gambar saja (cepat)
+        response = requests.get(url, timeout=5)
+        img = Image.open(BytesIO(response.content))
+        w, h = img.size
+        
+        # ATURAN FILTER:
+        # 1. Harus lebih besar dari 300x300 pixel (Logo biasanya < 100px)
+        # 2. Aspek rasio harus mendekati kotak (Produk shopee biasanya 1:1)
+        
+        if w < 300 or h < 300:
+            return False # Terlalu kecil (pasti logo/icon)
+            
+        return True
+    except:
+        return False
+
+# --- 1. FUNGSI SCRAPER ---
 def scrape_shopee_complete(url):
     chrome_options = Options()
-    # Setting wajib Streamlit Cloud
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
-    # Anti-detect
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    
-    # LOKASI BINARY SYSTEM (PENTING BUAT FIX ERROR VERSI)
     chrome_options.binary_location = "/usr/bin/chromium"
     
     driver = None
@@ -70,7 +86,6 @@ def scrape_shopee_complete(url):
     error_message = None
 
     try:
-        # GUNAKAN DRIVER SYSTEM, BUKAN WEBDRIVER MANAGER
         service = Service("/usr/bin/chromedriver")
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
@@ -78,14 +93,13 @@ def scrape_shopee_complete(url):
         driver.get(url)
         time.sleep(2) 
         
-        # --- SCROLLING AGRESIF AGAR PRODUK LOADING ---
-        st.toast("⬇️ Sedang mencari gambar produk...")
-        for _ in range(5):
+        # --- SCROLLING AGRESIF (7x) ---
+        st.toast("⬇️ Mencari gambar resolusi tinggi...")
+        for _ in range(7):
             driver.execute_script("window.scrollBy(0, 500);")
             time.sleep(1)
-        # Scroll balik ke atas jaga-jaga
-        driver.execute_script("window.scrollTo(0, 0);")
-        time.sleep(1)
+        driver.execute_script("window.scrollTo(0, 0);") # Balik ke atas buat gambar utama
+        time.sleep(2)
 
         # --- AMBIL JUDUL ---
         try:
@@ -97,59 +111,43 @@ def scrape_shopee_complete(url):
         except:
             data["title"] = "Produk Tanpa Nama"
 
-        # --- AMBIL GAMBAR DENGAN FILTER LOGO ---
+        # --- KUMPULKAN URL ---
         found_urls = set()
         
-        # Daftar kata kunci sampah (Logo Bank, Kurir, dll)
-        BLACKLIST_KEYWORDS = [
-            "bank", "bni", "bca", "bri", "mandiri", "cimb", 
-            "jne", "jnt", "sicepat", "anteraja", "shopeepay", 
-            "logo", "icon", "qr", "code", "linkedin", "facebook", 
-            "twitter", "google", "playstore", "appstore"
-        ]
+        # 1. Cari Background Images (Cara paling ampuh buat Shopee)
+        try:
+            elements = driver.find_elements(By.XPATH, "//*[contains(@style, 'background-image')]")
+            for el in elements:
+                style = el.get_attribute("style")
+                url_match = re.search(r'url\s*\(\s*["\']?(.*?)["\']?\s*\)', style)
+                if url_match:
+                    bg_url = url_match.group(1)
+                    if "cf.shopee" in bg_url or "susercontent" in bg_url:
+                        clean_url = bg_url.replace("_tn", "") # Hapus tanda thumbnail
+                        found_urls.add(clean_url)
+        except: pass
 
-        # Cara A: Tag IMG
+        # 2. Cari Tag IMG biasa
         try:
             images = driver.find_elements(By.TAG_NAME, "img")
             for img in images:
                 src = img.get_attribute("src")
                 if src and ("cf.shopee" in src or "susercontent" in src):
-                    # Filter URL Sampah
-                    src_lower = src.lower()
-                    if any(bad_word in src_lower for bad_word in BLACKLIST_KEYWORDS):
-                        continue
-                    # Filter Thumbnail kecil
-                    if "_tn" in src or "width=20" in src:
-                        continue
-                        
-                    found_urls.add(src)
+                     if "_tn" not in src:
+                        found_urls.add(src)
         except: pass
 
-        # Cara B: Background Image (Biasanya ini gambar produk utama Shopee)
-        try:
-            divs = driver.find_elements(By.CSS_SELECTOR, "div[style*='background-image']")
-            for div in divs:
-                style = div.get_attribute("style")
-                url_match = re.search(r'url\s*\(\s*["\']?(.*?)["\']?\s*\)', style)
-                if url_match:
-                    bg_url = url_match.group(1)
-                    if "cf.shopee" in bg_url or "susercontent" in bg_url:
-                        hd_url = bg_url.replace("_tn", "")
-                        
-                        # Filter URL Sampah
-                        if any(bad_word in hd_url.lower() for bad_word in BLACKLIST_KEYWORDS):
-                            continue
-                            
-                        found_urls.add(hd_url)
-        except: pass
-
-        # Filter Lanjutan: Cek Ukuran Gambar (Optional tapi bagus)
-        # Kita hanya simpan URL, nanti saat render baru diproses
-        
+        # --- FILTERING KETAT (PIXEL CHECK) ---
+        st.toast("🔍 Memfilter logo & ikon sampah...")
         valid_images = []
-        for img_url in found_urls:
-            # Filter ganda: URL harus panjang (bukan icon pendek) & tidak mengandung svg
-            if len(img_url) > 25 and ".svg" not in img_url and "data:image" not in img_url:
+        
+        for img_url in list(found_urls):
+            # Cek string dulu biar cepat
+            if "svg" in img_url or "data:image" in img_url:
+                continue
+                
+            # CEK UKURAN FISIK GAMBAR
+            if is_big_image(img_url):
                 valid_images.append(img_url)
 
         data["images"] = list(set(valid_images))
@@ -345,7 +343,7 @@ if scrape_btn:
         if data and data['images']:
             st.session_state.shopee_data = data
             st.session_state.generated_script = None
-            st.success(f"✅ Berhasil mengambil {len(data['images'])} gambar produk (Logo dibuang)!")
+            st.success(f"✅ Berhasil mengambil {len(data['images'])} gambar produk (High Quality)!")
         else: 
             st.error(f"❌ Gagal mengambil gambar produk. Cobalah opsi Upload Manual di bawah.")
     else:
@@ -389,7 +387,6 @@ if st.session_state.shopee_data:
     for i in range(limit):
         with cols[i%3]:
             img_source = images_list[i]
-            # Handle display image based on type (URL string vs UploadedFile object)
             if isinstance(img_source, str):
                 st.image(img_source, use_container_width=True)
             else:
