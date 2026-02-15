@@ -1,7 +1,7 @@
 streamlit
 google-generativeai
 selenium
-webdriver-manager>=4.0.0
+webdriver-manager
 opencv-python-headless
 numpy
 requests
