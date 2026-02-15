@@ -21,6 +21,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.core.os_manager import ChromeType
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Shopee Video Creator", page_icon="🛍️", layout="wide")
@@ -33,7 +34,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- SIDEBAR (UPDATE INI SAJA) ---
+# --- SIDEBAR (Auto-Detect API Key) ---
 with st.sidebar:
     st.header("⚙️ Pengaturan")
     
@@ -42,22 +43,24 @@ with st.sidebar:
         api_key = st.secrets["GEMINI_API_KEY"]
         st.success("Status: API Key Terhubung ✅")
     else:
-        # Jika lupa setting secrets, kotak input akan muncul sebagai cadangan
+        # Jika tidak ada di secrets, minta input manual
         api_key = st.text_input("Gemini API Key", type="password", help="Masukkan API Key Gemini Anda")
 
     st.caption("Tanpa API Key, sistem akan menggunakan template manual dari Judul Produk.")
     st.markdown("---")
     st.info("Tips: Gunakan link produk Shopee yang gambarnya jelas.")
 
-st.title("🛍️ Shopee Video Generator: Title-to-Script")
-st.markdown("Ubah **Judul Produk** menjadi video promosi dengan narasi suara Gadis (TikTok Style).")
+st.title("🛍️ Shopee Video Generator: Pro Style")
+st.markdown("Ubah **Judul Produk** menjadi video promosi estetik (Blur Background & Zoom).")
 
-# --- 1. FUNGSI SCRAPER ---
+# --- 1. FUNGSI SCRAPER (UPDATED: FIX CHROME VERSION) ---
 def scrape_shopee_complete(url):
     chrome_options = Options()
-    chrome_options.add_argument("--headless")
+    # Gunakan headless=new untuk kompatibilitas cloud terbaru
+    chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
@@ -66,7 +69,10 @@ def scrape_shopee_complete(url):
     error_message = None
 
     try:
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+        # --- FIX: Gunakan ChromeType.CHROMIUM ---
+        # Ini akan mencari binary Chromium yang terinstal di server Linux (Streamlit Cloud)
+        service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
         
         st.toast("🕵️ Sedang membaca halaman produk...")
         driver.get(url)
@@ -74,6 +80,7 @@ def scrape_shopee_complete(url):
         
         page_source = driver.page_source
 
+        # AMBIL JUDUL
         try:
             clean_url = url.split('?')[0]
             slug = clean_url.split('/')[-1]
@@ -83,6 +90,7 @@ def scrape_shopee_complete(url):
         except Exception as e:
             data["title"] = "Gagal mengambil judul dari URL"
 
+        # AMBIL GAMBAR
         ids_found = []
         match = re.search(r'"images":\s*\[(.*?)\]', page_source)
         if match:
@@ -107,7 +115,7 @@ def scrape_shopee_complete(url):
             
     return data, error_message
 
-# --- 2. FUNGSI AI WRITER (GEMINI) ---
+# --- 2. FUNGSI AI WRITER ---
 def generate_ai_script(api_key, title, num_slides):
     if not api_key: return None
     try:
@@ -142,28 +150,27 @@ def get_audio_gadis(text, index):
     except:
         return None
 
-# --- 4. TEXT OVERLAY (PROFESIONAL: STROKE TEBAL + SHADOW HALUS) ---
+# --- 4. TEXT OVERLAY (FONT KECIL & POSISI NAIK) ---
 def add_text_to_image(cv2_img, text):
     img_pil = Image.fromarray(cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(img_pil)
     w, h = img_pil.size
     
-    # --- PENGATURAN FONT PROFESIONAL ---
-    # Ukuran font dinamis tapi proporsional (0.04 dari tinggi layar)
-    fontsize = int(h * 0.03)
+    # --- PENGATURAN UKURAN FONT ---
+    # 0.03 agar kecil tapi terbaca
+    fontsize = int(h * 0.03) 
+    
     try:
         font = ImageFont.truetype("arialbd.ttf", fontsize)
     except:
         font = ImageFont.load_default()
 
-    # --- WORD WRAPPING (Agar teks rapi di tengah) ---
-    max_width = w * 0.85 # Margin kiri kanan 15%
+    # --- WORD WRAPPING ---
+    max_width = w * 0.85 
     words = text.split()
     lines, current_line = [], []
-    
     for word in words:
         current_line.append(word)
-        # Cek lebar baris saat ini
         bbox = draw.textbbox((0, 0), " ".join(current_line), font=font)
         if (bbox[2] - bbox[0]) > max_width:
             current_line.pop()
@@ -172,63 +179,61 @@ def add_text_to_image(cv2_img, text):
     lines.append(" ".join(current_line))
     final_text = "\n".join(lines)
 
-    # --- POSISI TEKS (LOWER THIRD) ---
     # Hitung ukuran total teks
     bbox_multiline = draw.multiline_textbbox((0, 0), final_text, font=font, align='center', spacing=10)
     text_w = bbox_multiline[2] - bbox_multiline[0]
-    text_h = bbox_multiline[3] - bbox_multiline[1]
     
-    # Posisi X: Center
+    # --- PENGATURAN POSISI TEKS ---
+    # Posisi Horizontal: Center
     pos_x = (w - text_w) // 2
-    # Posisi Y: Di area bawah (75% ke bawah), memberi ruang untuk produk di tengah
-    pos_y = int(h * 0.72) 
-
-    # --- EFEK TEXT: DROP SHADOW + OUTLINE ---
-    # 1. Shadow Hitam (agar bacaan jelas di background terang)
-    shadow_offset = 3
-    draw.multiline_text((pos_x + shadow_offset, pos_y + shadow_offset), final_text, font=font, fill=(0,0,0, 120), align='center', spacing=10)
     
-    # 2. Outline Tebal & Text Putih
+    # Posisi Vertikal: 55% dari atas (Sedikit di bawah tengah, tidak mepet bawah)
+    pos_y = int(h * 0.55) 
+
+    # --- EFEK TEXT ---
+    shadow_offset = 3
+    # Shadow
+    draw.multiline_text((pos_x + shadow_offset, pos_y + shadow_offset), final_text, font=font, fill=(0,0,0, 160), align='center', spacing=10)
+    
+    # Text Utama (Putih Outline Hitam)
     draw.multiline_text(
         (pos_x, pos_y), 
         final_text, 
         font=font, 
-        fill=(255, 255, 255), # Putih Bersih
-        stroke_width=5,       # Outline tebal tegas
-        stroke_fill=(0, 0, 0), # Hitam Pekat
+        fill=(255, 255, 255), 
+        stroke_width=4,       
+        stroke_fill=(0, 0, 0), 
         align='center',
         spacing=10
     )
     
     return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
-# --- 5. RENDER ENGINE (PROFESIONAL: BLURRED BACKGROUND + ZOOM) ---
+# --- 5. RENDER ENGINE (BLURRED BG + ZOOM) ---
 def create_single_clip(img_url, text_narration, index):
     try:
         # Download Image
         res = requests.get(img_url)
         img_original = cv2.imdecode(np.frombuffer(res.content, np.uint8), cv2.IMREAD_COLOR)
         
-        # Resolusi Target (TikTok/Reels/Shorts)
+        # Target Resolution
         th, tw = 1920, 1080
         
-        # --- LANGKAH 1: MEMBUAT BACKGROUND BLUR (AESTHETIC) ---
-        # Resize gambar asli agar menutupi seluruh layar (crop to fill)
+        # --- BACKGROUND BLUR ---
         h_orig, w_orig, _ = img_original.shape
         scale_bg = max(tw/w_orig, th/h_orig)
         bg_w, bg_h = int(w_orig * scale_bg), int(h_orig * scale_bg)
         img_bg_resized = cv2.resize(img_original, (bg_w, bg_h))
         
-        # Crop center untuk background
         x_bg = (bg_w - tw) // 2
         y_bg = (bg_h - th) // 2
         background_base = img_bg_resized[y_bg:y_bg+th, x_bg:x_bg+tw]
         
-        # Beri efek BLUR kuat & Gelapkan sedikit
-        background_base = cv2.GaussianBlur(background_base, (99, 99), 0) # Blur kuat
-        background_base = cv2.addWeighted(background_base, 0.6, np.zeros_like(background_base), 0.4, -20) # Gelapkan
+        # Blur & Darken
+        background_base = cv2.GaussianBlur(background_base, (99, 99), 0)
+        background_base = cv2.addWeighted(background_base, 0.6, np.zeros_like(background_base), 0.4, -20)
         
-        # --- LANGKAH 2: SIAPKAN AUDIO ---
+        # --- AUDIO ---
         audio_path = get_audio_gadis(re.sub(r'[^\w\s,.]', '', text_narration), index)
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         res_ff = subprocess.run([ffmpeg, '-i', audio_path, '-hide_banner'], stderr=subprocess.PIPE, text=True)
@@ -246,62 +251,45 @@ def create_single_clip(img_url, text_narration, index):
         tmp_v = f"tmp_{index}.mp4"
         out = cv2.VideoWriter(tmp_v, cv2.VideoWriter_fourcc(*'mp4v'), fps, (tw, th))
         
-        # --- LANGKAH 3: RENDER LOOP DENGAN EFEK ZOOM PADA PRODUK UTAMA ---
-        # Produk utama tidak di-stretch, tapi "Fit" (utuh) di tengah
-        # Kita buat produk utama ukurannya sekitar 80% dari lebar layar
+        # --- ZOOM LOGIC ---
+        # Produk fit di tengah (85% lebar layar)
         target_product_w = int(tw * 0.85) 
         scale_prod = target_product_w / w_orig
         prod_w, prod_h = int(w_orig * scale_prod), int(h_orig * scale_prod)
         img_product_static = cv2.resize(img_original, (prod_w, prod_h))
 
         for i in range(total_frames):
-            # Ambil background blur (statis)
             frame = background_base.copy()
             
-            # --- EFEK ZOOM: Hanya pada produk depan, bukan background ---
-            # Zoom halus dari 1.0 ke 1.08
+            # Zoom Factor (1.0 -> 1.08)
             zoom_factor = 1.0 + (0.08 * (i / total_frames))
             
-            # Hitung ukuran baru saat zoom
             curr_w = int(prod_w * zoom_factor)
             curr_h = int(prod_h * zoom_factor)
-            
-            # Resize produk
             img_zoomed = cv2.resize(img_product_static, (curr_w, curr_h))
             
-            # Tempel produk di tengah frame background
-            # Hitung koordinat penempatan
-            y_offset = (th - curr_h) // 2 - 100 # Naikkan sedikit (-100) biar imbang dengan teks
+            # Center Positioning
+            y_offset = (th - curr_h) // 2 - 50 # Naikkan sedikit
             x_offset = (tw - curr_w) // 2
             
-            # Logika Overlay (Menangani transparansi jika keluar batas, meski di sini kita crop)
-            # Pastikan tidak error jika zoom terlalu besar melebihi canvas (clamping)
+            # Overlay Logic
             y1, y2 = max(0, y_offset), min(th, y_offset + curr_h)
             x1, x2 = max(0, x_offset), min(tw, x_offset + curr_w)
-            
-            # Koordinat source image
             sy1, sy2 = max(0, -y_offset), min(curr_h, th - y_offset)
             sx1, sx2 = max(0, -x_offset), min(curr_w, tw - x_offset)
             
-            # Tempel gambar produk ke background
             if y2 > y1 and x2 > x1:
                 frame[y1:y2, x1:x2] = img_zoomed[sy1:sy2, sx1:sx2]
-                
-                # Opsional: Beri Border Putih Tipis di sekeliling produk agar tegas
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 3)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 3) # Border Putih
 
-            # Tambahkan Teks
             frame = add_text_to_image(frame, text_narration)
-            
             out.write(frame)
             
         out.release()
         
-        # Gabungkan Audio & Video
         final_v = f"clip_{index}.mp4"
         subprocess.run([ffmpeg, '-y', '-i', tmp_v, '-i', audio_path, '-c:v', 'libx264', '-c:a', 'aac', '-shortest', final_v], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-        # Bersih-bersih
         if os.path.exists(tmp_v): os.remove(tmp_v)
         if os.path.exists(audio_path): os.remove(audio_path)
         
@@ -373,4 +361,3 @@ if st.session_state.shopee_data:
                 if os.path.exists(c): os.remove(c)
             if os.path.exists("list.txt"): os.remove("list.txt")
             st_status.text("Selesai!")
-
