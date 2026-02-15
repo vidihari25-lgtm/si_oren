@@ -1,0 +1,10 @@
+streamlit
+google-generativeai
+selenium
+webdriver-manager
+opencv-python-headless
+numpy
+requests
+edge-tts
+imageio-ffmpeg
+Pillow
