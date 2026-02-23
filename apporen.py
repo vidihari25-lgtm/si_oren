@@ -263,21 +263,8 @@ st.markdown("<br>", unsafe_allow_html=True)
 _, col_reset, _ = st.columns([1, 2, 1])
 
 with col_reset:
-    # Menggunakan custom style inline untuk membuat tombol ini tampil beda (merah gelap)
-    st.markdown("""
-        <style>
-        div[data-testid="stButton"] button[kind="secondary"] {
-            background-color: #4f4f4f;
-            color: white;
-            border: none;
-        }
-        div[data-testid="stButton"] button[kind="secondary"]:hover {
-            background-color: #cc0000;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-    
-    if st.button("🗑️ HAPUS DATA & BUAT PRODUK BARU", kind="secondary", use_container_width=True):
+    # GANTI kata 'kind' menjadi 'type' pada baris di bawah ini
+    if st.button("🗑️ HAPUS DATA & BUAT PRODUK BARU", type="secondary", use_container_width=True):
         # Tambah counter untuk me-reset tampilan uploader file
         st.session_state.reset_counter += 1
         
@@ -289,3 +276,4 @@ with col_reset:
         
         # Perintahkan Streamlit untuk memuat ulang halaman secara paksa
         st.rerun()
+
