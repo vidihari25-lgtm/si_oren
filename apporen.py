@@ -145,7 +145,7 @@ with col_kanan:
             with st.spinner("AI sedang meracik Judul SEO, Naskah, dan Hashtag..."):
                 try:
                     genai.configure(api_key=gemini_key)
-                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    model = genai.GenerativeModel('gemini-2.0-flash')
                     img_to_analyze = Image.open(uploaded_images[0])
                     
                     prompt = f"""
@@ -234,3 +234,4 @@ if uploaded_images and uploaded_audio:
                             video_bytes = video_file.read()
                             st.video(video_bytes, format="video/mp4")
                             st.download_button("⬇️ Download Video (Siap Upload)", data=video_bytes, file_name="affiliate_promo.mp4", mime="video/mp4", use_container_width=True)
+
