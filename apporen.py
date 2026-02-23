@@ -9,6 +9,16 @@ from PIL import Image
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Ultimate Affiliate Video & AI Script", page_icon="🛍️", layout="wide")
 
+# --- SESSION STATE (DAYA INGAT APLIKASI) ---
+# Ini penting agar teks AI tidak hilang dan file uploader bisa di-reset
+if 'reset_counter' not in st.session_state:
+    st.session_state.reset_counter = 0
+    st.session_state.ai_generated = False
+    st.session_state.judul_ai = ""
+    st.session_state.naskah_ai = ""
+    st.session_state.hashtag_ai = ""
+
+# --- CSS CUSTOM ---
 st.markdown("""
 <style>
     .stButton>button {
@@ -104,10 +114,12 @@ col_kiri, col_kanan = st.columns([1, 1], gap="large")
 
 with col_kiri:
     st.header("📸 1. Input Material")
+    # File uploader menggunakan key dinamis agar bisa di-reset
     uploaded_images = st.file_uploader(
         "Upload Foto Produk (Minimal 2)", 
         type=['png', 'jpg', 'jpeg'], 
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        key=f"img_uploader_{st.session_state.reset_counter}"
     )
     
     st.markdown("---")
@@ -115,14 +127,14 @@ with col_kiri:
     st.info("Setelah men-generate script di samping dan mengubahnya jadi suara, upload file audionya ke sini.")
     uploaded_audio = st.file_uploader(
         "Upload Audio (MP3/WAV)", 
-        type=['mp3', 'wav', 'm4a', 'aac']
+        type=['mp3', 'wav', 'm4a', 'aac'],
+        key=f"aud_uploader_{st.session_state.reset_counter}"
     )
 
 with col_kanan:
     st.header("🤖 2. AI Copywriter & SEO")
     st.markdown('<div class="ai-box">', unsafe_allow_html=True)
     
-    # --- MENGAMBIL API KEY DARI SECRETS STREAMLIT ---
     try:
         gemini_key = st.secrets["GEMINI_API_KEY"]
         st.success("✅ API Key Sistem berhasil dimuat secara aman.")
@@ -133,7 +145,8 @@ with col_kanan:
     keterangan_produk = st.text_area(
         "📝 Keterangan Tambahan (Opsional):", 
         placeholder="Misal: OOTD kondangan, bahan brokat premium, diskon 50%, free ongkir.",
-        height=100
+        height=100,
+        key=f"ket_{st.session_state.reset_counter}"
     )
     
     if st.button("✨ Generate Script & SEO Shopee", use_container_width=True):
@@ -180,22 +193,31 @@ with col_kanan:
                             naskah_ai = parts[1].replace("NASKAH:", "").strip()
                             hashtag_ai = parts[2].replace("HASHTAG:", "").strip()
                     
+                    # Simpan hasil ke dalam Session State (Daya Ingat)
+                    st.session_state.judul_ai = judul_ai
+                    st.session_state.naskah_ai = naskah_ai
+                    st.session_state.hashtag_ai = hashtag_ai
+                    st.session_state.ai_generated = True
+                    
                     st.success("✅ SEO, Script, & Hashtag berhasil diracik!")
-                    
-                    if judul_ai:
-                        st.write("📌 **Judul Video (SEO Friendly):**")
-                        st.code(judul_ai, language="text")
-                        
-                    st.write("📝 **Naskah Voice Over:**")
-                    st.code(naskah_ai, language="text")
-                    
-                    if hashtag_ai:
-                        st.write("🏷️ **5 Hashtag Shopee Video:**")
-                        st.code(hashtag_ai, language="text")
                     
                 except Exception as e:
                     st.error(f"Gagal menghubungi Gemini AI. Error: {e}")
     
+    # --- MENAMPILKAN HASIL AI DARI SESSION STATE ---
+    # Karena berada di luar tombol, teks ini tidak akan hilang saat render video
+    if st.session_state.ai_generated:
+        if st.session_state.judul_ai:
+            st.write("📌 **Judul Video (SEO Friendly):**")
+            st.code(st.session_state.judul_ai, language="text")
+            
+        st.write("📝 **Naskah Voice Over:**")
+        st.code(st.session_state.naskah_ai, language="text")
+        
+        if st.session_state.hashtag_ai:
+            st.write("🏷️ **5 Hashtag Shopee Video:**")
+            st.code(st.session_state.hashtag_ai, language="text")
+            
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- TOMBOL RENDER FINAL ---
@@ -235,3 +257,35 @@ if uploaded_images and uploaded_audio:
                             st.video(video_bytes, format="video/mp4")
                             st.download_button("⬇️ Download Video (Siap Upload)", data=video_bytes, file_name="affiliate_promo.mp4", mime="video/mp4", use_container_width=True)
 
+# --- TOMBOL RESET / HAPUS DATA ---
+st.markdown("---")
+st.markdown("<br>", unsafe_allow_html=True)
+_, col_reset, _ = st.columns([1, 2, 1])
+
+with col_reset:
+    # Menggunakan custom style inline untuk membuat tombol ini tampil beda (merah gelap)
+    st.markdown("""
+        <style>
+        div[data-testid="stButton"] button[kind="secondary"] {
+            background-color: #4f4f4f;
+            color: white;
+            border: none;
+        }
+        div[data-testid="stButton"] button[kind="secondary"]:hover {
+            background-color: #cc0000;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    if st.button("🗑️ HAPUS DATA & BUAT PRODUK BARU", kind="secondary", use_container_width=True):
+        # Tambah counter untuk me-reset tampilan uploader file
+        st.session_state.reset_counter += 1
+        
+        # Bersihkan ingatan AI
+        st.session_state.ai_generated = False
+        st.session_state.judul_ai = ""
+        st.session_state.naskah_ai = ""
+        st.session_state.hashtag_ai = ""
+        
+        # Perintahkan Streamlit untuk memuat ulang halaman secara paksa
+        st.rerun()
