@@ -1,424 +1,236 @@
 import streamlit as st
-import os
-import re
-import time
-import requests
-import cv2
-import numpy as np
 import subprocess
-import asyncio
-import json
+import tempfile
+import os
 import random
-import edge_tts 
-import imageio_ffmpeg
-from PIL import Image, ImageDraw, ImageFont
-from io import BytesIO
-
-# --- IMPORT AI ---
 import google.generativeai as genai
-
-# --- IMPORT SELENIUM ---
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By 
+from PIL import Image
 
 # --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Shopee Video Creator", page_icon="🛍️", layout="wide")
+st.set_page_config(page_title="Ultimate Affiliate Video & AI Script", page_icon="🛍️", layout="wide")
 
-# --- CSS CUSTOM ---
 st.markdown("""
 <style>
-    .stTextArea textarea {font-size: 16px !important;}
-    div[data-testid="stImage"] img {border-radius: 10px;}
-    .stButton button {background-color: #EE4D2D; color: white;}
+    .stButton>button {
+        background-color: #EE4D2D; 
+        color: white;
+        font-weight: bold;
+        border-radius: 8px;
+        transition: all 0.3s ease;
+    }
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 8px rgba(0,0,0,0.15);
+    }
+    .ai-box {
+        background-color: #f0f8ff;
+        padding: 20px;
+        border-radius: 10px;
+        border-left: 5px solid #0088cc;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- SIDEBAR ---
-with st.sidebar:
-    st.header("⚙️ Pengaturan")
-    if "GEMINI_API_KEY" in st.secrets:
-        api_key = st.secrets["GEMINI_API_KEY"]
-        st.success("Status: API Key Terhubung ✅")
-    else:
-        api_key = st.text_input("Gemini API Key", type="password", help="Masukkan API Key Gemini Anda")
+st.title("🛍️ Shopee Affiliate: AI Video & Script Generator")
+st.markdown("Aplikasi pintar untuk afiliator: Buat naskah *voice over* otomatis dari foto dengan AI, lalu jadikan video katalog elegan berbingkai polaroid.")
 
-    st.caption("Tanpa API Key, sistem akan menggunakan template manual.")
-    st.markdown("---")
-    st.info("💡 Jika tetap gagal, berarti IP Server diblokir total oleh Shopee. Gunakan Upload Manual.")
-
-st.title("🛍️ Shopee Video Generator: Meta-Scraper")
-st.markdown("Mengambil gambar via **Meta Tags & JSON** (Lebih kebal blokir).")
-
-# --- FUNGSI VALIDASI ---
-def is_valid_image(url):
-    if not url or "http" not in url: return False
-    if "svg" in url or "data:image" in url or "icon" in url: return False
-    return True
-
-# --- 1. FUNGSI SCRAPER (METODE JALUR BELAKANG) ---
-def scrape_shopee_complete(url):
-    chrome_options = Options()
-    chrome_options.add_argument("--headless") 
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1920,1080")
-    
-    # User Agent wajib disamakan dengan browser PC asli
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    chrome_options.binary_location = "/usr/bin/chromium"
-    
-    driver = None
-    data = {"images": [], "title": "", "description": []}
-    error_message = None
-
+# --- FUNGSI FFmpeg ---
+def get_audio_duration(audio_path):
     try:
-        service = Service("/usr/bin/chromedriver")
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        
-        st.toast("🕵️ Mengakses Shopee (Mode Metadata)...")
-        driver.get(url)
-        time.sleep(3) # Tunggu sebentar untuk parsing HTML dasar
-        
-        found_urls = set()
-
-        # --- TEKNIK 1: AMBIL DARI META TAGS (Paling Ampuh) ---
-        # Shopee menyimpan gambar utama di og:image agar link terlihat bagus di WA/FB
-        try:
-            og_image = driver.find_element(By.XPATH, '//meta[@property="og:image"]').get_attribute('content')
-            if is_valid_image(og_image):
-                found_urls.add(og_image)
-        except: pass
-
-        # --- TEKNIK 2: AMBIL DARI JSON-LD (Structured Data) ---
-        # Shopee menaruh data produk di script JSON untuk SEO Google
-        try:
-            scripts = driver.find_elements(By.XPATH, '//script[@type="application/ld+json"]')
-            for script in scripts:
-                try:
-                    json_content = json.loads(script.get_attribute('innerHTML'))
-                    # Cek tipe Product
-                    if json_content.get('@type') == 'Product':
-                        # Ambil Nama
-                        if 'name' in json_content:
-                            data['title'] = json_content['name']
-                        # Ambil Gambar
-                        if 'image' in json_content:
-                            img_data = json_content['image']
-                            if isinstance(img_data, list):
-                                for i in img_data: found_urls.add(i)
-                            elif isinstance(img_data, str):
-                                found_urls.add(img_data)
-                except: continue
-        except: pass
-
-        # --- TEKNIK 3: VISUAL FALLBACK (Background Image) ---
-        # Jika cara di atas gagal, baru coba scroll dan cari background image
-        if len(found_urls) < 1:
-            st.toast("⬇️ Mencoba teknik scroll...")
-            driver.execute_script("window.scrollTo(0, 1000);")
-            time.sleep(1)
-            try:
-                elements = driver.find_elements(By.XPATH, "//*[contains(@style, 'background-image')]")
-                for el in elements:
-                    style = el.get_attribute("style")
-                    url_match = re.search(r'url\s*\(\s*["\']?(.*?)["\']?\s*\)', style)
-                    if url_match:
-                        bg_url = url_match.group(1)
-                        if "cf.shopee" in bg_url or "susercontent" in bg_url:
-                            clean_url = bg_url.replace("_tn", "")
-                            found_urls.add(clean_url)
-            except: pass
-
-        # --- JUDUL FALLBACK ---
-        if not data['title']:
-            try:
-                # Coba ambil dari og:title
-                data['title'] = driver.find_element(By.XPATH, '//meta[@property="og:title"]').get_attribute('content')
-            except:
-                data['title'] = "Produk Shopee Viral"
-
-        # --- FILTERING ---
-        valid_images = []
-        for img_url in found_urls:
-            if is_valid_image(img_url):
-                valid_images.append(img_url)
-
-        data["images"] = list(set(valid_images))
-
+        cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audio_path]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        return float(result.stdout.strip())
     except Exception as e:
-        error_message = f"Error: {str(e)}"
-    finally:
-        if driver: driver.quit()
+        st.error(f"Gagal membaca durasi audio. Error: {e}")
+        return 0.0
+
+def generate_framed_video(daftar_gambar, audio_path, nama_output):
+    jumlah_gambar = len(daftar_gambar)
+    audio_duration = get_audio_duration(audio_path)
+    if audio_duration == 0: return False
+
+    durasi_transisi = 1.0 
+    total_waktu_transisi = (jumlah_gambar - 1) * durasi_transisi
+    durasi_per_gambar = (audio_duration + total_waktu_transisi) / jumlah_gambar
+    
+    input_padding = 3.0 
+    frames_per_gambar = int(durasi_per_gambar * 30)
+
+    TRANSITIONS = ['fade', 'dissolve', 'slideup', 'slidedown', 'wiperight', 'wipeleft', 'circleopen', 'radial']
+
+    cmd = ['ffmpeg', '-y']
+    for gambar in daftar_gambar:
+        cmd.extend(['-loop', '1', '-t', str(durasi_per_gambar + input_padding), '-i', gambar])
             
-    return data, error_message
+    cmd.extend(['-i', audio_path])
 
-# --- 2. FUNGSI AI WRITER ---
-def generate_ai_script(api_key, title, num_slides):
-    if not api_key: return None
-    try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-flash-latest')
-        prompt = f"""
-        Buatkan naskah voice-over TikTok 'Indonesian local look' untuk produk: "{title}"
-        
-        Target: {num_slides} slide.
-        Gaya: Santai, receh, ala review TikTok.
-        Format: JSON array of strings.
-        Slide terakhir wajib ajakan cek keranjang kuning.
-        """
-        response = model.generate_content(prompt)
-        text_resp = response.text.strip()
-        if "```json" in text_resp:
-            text_resp = text_resp.split("```json")[1].split("```")[0].strip()
-        return json.loads(text_resp)
-    except:
-        return None
+    filter_complex = ""
+    for i in range(jumlah_gambar):
+        filter_complex += f"[{i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=150:150[bg{i}]; "
+        filter_complex += f"[{i}:v]scale=850:1800:force_original_aspect_ratio=decrease[fg_raw{i}]; "
+        filter_complex += f"[fg_raw{i}]pad=iw+80:ih+80:40:40:white[framed_fg{i}]; "
+        filter_complex += f"[bg{i}][framed_fg{i}]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[comp{i}]; "
+        filter_complex += f"[comp{i}]zoompan=z='min(zoom+0.0002,1.06)':d={frames_per_gambar+90}:s=1080x1920:fps=30[scene{i}]; "
 
-# --- 3. FUNGSI SUARA ---
-async def generate_voice_gadis(text, output_file):
-    communicate = edge_tts.Communicate(text, "id-ID-GadisNeural", rate="+10%")
-    await communicate.save(output_file)
-
-def get_audio_gadis(text, index):
-    filename = f"audio_{index}.mp3"
-    try:
-        asyncio.run(generate_voice_gadis(text, filename))
-        return filename
-    except:
-        return None
-
-# --- 4. TEXT OVERLAY ---
-def add_text_to_image(cv2_img, text):
-    img_pil = Image.fromarray(cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB))
-    draw = ImageDraw.Draw(img_pil)
-    w, h = img_pil.size
+    if jumlah_gambar == 1:
+        filter_complex += "[scene0]copy[outv]"
+    else:
+        node_sebelumnya = "[scene0]"
+        waktu_offset = durasi_per_gambar - durasi_transisi 
+        for i in range(1, jumlah_gambar):
+            node_sekarang = f"[scene{i}]"
+            node_output = f"[fade{i}]" if i < jumlah_gambar - 1 else "[outv]"
+            transisi_terpilih = random.choice(TRANSITIONS)
+            filter_complex += f"{node_sebelumnya}{node_sekarang}xfade=transition={transisi_terpilih}:duration={durasi_transisi}:offset={waktu_offset}{node_output}; "
+            node_sebelumnya = node_output
+            waktu_offset += (durasi_per_gambar - durasi_transisi) 
+            
+    filter_complex = filter_complex.strip("; ")
+    audio_index = len(daftar_gambar)
+    cmd.extend(['-filter_complex', filter_complex, '-map', '[outv]', '-map', f'{audio_index}:a'])
+    cmd.extend(['-c:v', 'libx264', '-preset', 'fast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-r', '30', '-shortest', nama_output])
     
-    fontsize = int(h * 0.03) 
     try:
-        font = ImageFont.truetype("arialbd.ttf", fontsize)
-    except:
-        font = ImageFont.load_default()
+        subprocess.run(cmd, check=True, stderr=subprocess.PIPE) 
+        return True
+    except subprocess.CalledProcessError as e:
+        error_message = e.stderr.decode('utf-8') if e.stderr else str(e)
+        st.error(f"Terjadi kesalahan FFmpeg:\n{error_message}")
+        return False
 
-    max_width = w * 0.85 
-    words = text.split()
-    lines, current_line = [], []
-    for word in words:
-        current_line.append(word)
-        bbox = draw.textbbox((0, 0), " ".join(current_line), font=font)
-        if (bbox[2] - bbox[0]) > max_width:
-            current_line.pop()
-            lines.append(" ".join(current_line))
-            current_line = [word]
-    lines.append(" ".join(current_line))
-    final_text = "\n".join(lines)
+# ================= UI STREAMLIT =================
 
-    bbox_multiline = draw.multiline_textbbox((0, 0), final_text, font=font, align='center', spacing=10)
-    text_w = bbox_multiline[2] - bbox_multiline[0]
-    
-    pos_x = (w - text_w) // 2
-    pos_y = int(h * 0.55) 
+col_kiri, col_kanan = st.columns([1, 1], gap="large")
 
-    shadow_offset = 3
-    draw.multiline_text((pos_x + shadow_offset, pos_y + shadow_offset), final_text, font=font, fill=(0,0,0, 160), align='center', spacing=10)
-    
-    draw.multiline_text(
-        (pos_x, pos_y), 
-        final_text, 
-        font=font, 
-        fill=(255, 255, 255), 
-        stroke_width=4,       
-        stroke_fill=(0, 0, 0), 
-        align='center',
-        spacing=10
+with col_kiri:
+    st.header("📸 1. Input Material")
+    uploaded_images = st.file_uploader(
+        "Upload Foto Produk (Minimal 2)", 
+        type=['png', 'jpg', 'jpeg'], 
+        accept_multiple_files=True
     )
     
-    return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+    st.markdown("---")
+    st.header("🎵 3. Upload Voice/Musik")
+    st.info("Setelah men-generate script di samping dan mengubahnya jadi suara, upload file audionya ke sini.")
+    uploaded_audio = st.file_uploader(
+        "Upload Audio (MP3/WAV)", 
+        type=['mp3', 'wav', 'm4a', 'aac']
+    )
 
-# --- 5. RENDER ENGINE ---
-def create_single_clip(img_data, text_narration, index, is_upload=False):
+with col_kanan:
+    st.header("🤖 2. AI Copywriter & SEO")
+    st.markdown('<div class="ai-box">', unsafe_allow_html=True)
+    
+    # --- MENGAMBIL API KEY DARI SECRETS STREAMLIT ---
     try:
-        if is_upload:
-            file_bytes = np.asarray(bytearray(img_data.read()), dtype=np.uint8)
-            img_original = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-            img_data.seek(0)
+        gemini_key = st.secrets["GEMINI_API_KEY"]
+        st.success("✅ API Key Sistem berhasil dimuat secara aman.")
+    except Exception:
+        gemini_key = ""
+        st.error("⚠️ API Key tidak ditemukan di Streamlit Secrets. Aplikasi tidak bisa men-generate script.")
+
+    keterangan_produk = st.text_area(
+        "📝 Keterangan Tambahan (Opsional):", 
+        placeholder="Misal: OOTD kondangan, bahan brokat premium, diskon 50%, free ongkir.",
+        height=100
+    )
+    
+    if st.button("✨ Generate Script & SEO Shopee", use_container_width=True):
+        if not gemini_key:
+            st.warning("⚠️ API Key belum disetting di Streamlit Cloud.")
+        elif not uploaded_images:
+            st.warning("⚠️ Mohon upload foto produk di Langkah 1 agar AI bisa menganalisa gambarnya.")
         else:
-            res = requests.get(img_data)
-            img_original = cv2.imdecode(np.frombuffer(res.content, np.uint8), cv2.IMREAD_COLOR)
-            
-        th, tw = 1920, 1080
-        h_orig, w_orig, _ = img_original.shape
-        scale_bg = max(tw/w_orig, th/h_orig)
-        bg_w, bg_h = int(w_orig * scale_bg), int(h_orig * scale_bg)
-        img_bg_resized = cv2.resize(img_original, (bg_w, bg_h))
-        
-        x_bg = (bg_w - tw) // 2
-        y_bg = (bg_h - th) // 2
-        background_base = img_bg_resized[y_bg:y_bg+th, x_bg:x_bg+tw]
-        
-        background_base = cv2.GaussianBlur(background_base, (99, 99), 0)
-        background_base = cv2.addWeighted(background_base, 0.6, np.zeros_like(background_base), 0.4, -20)
-        
-        audio_path = get_audio_gadis(re.sub(r'[^\w\s,.]', '', text_narration), index)
-        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-        res_ff = subprocess.run([ffmpeg, '-i', audio_path, '-hide_banner'], stderr=subprocess.PIPE, text=True)
-        
-        dur = 3.0
-        for line in res_ff.stderr.split('\n'):
-            if "Duration" in line:
-                t = line.split("Duration:")[1].split(",")[0].strip()
-                h_m, m_m, s_m = t.split(':')
-                dur = float(h_m)*3600 + float(m_m)*60 + float(s_m) + 0.5
-                break
-        
-        fps = 30
-        total_frames = int(dur * fps)
-        tmp_v = f"tmp_{index}.mp4"
-        out = cv2.VideoWriter(tmp_v, cv2.VideoWriter_fourcc(*'mp4v'), fps, (tw, th))
-        
-        target_product_w = int(tw * 0.85) 
-        scale_prod = target_product_w / w_orig
-        prod_w, prod_h = int(w_orig * scale_prod), int(h_orig * scale_prod)
-        img_product_static = cv2.resize(img_original, (prod_w, prod_h))
+            with st.spinner("AI sedang meracik Judul SEO, Naskah, dan Hashtag..."):
+                try:
+                    genai.configure(api_key=gemini_key)
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    img_to_analyze = Image.open(uploaded_images[0])
+                    
+                    prompt = f"""
+                    Kamu adalah pakar SEO Shopee Video dan Copywriter Affiliate handal.
+                    Tugasmu adalah membuat Judul, Naskah Voice Over, dan Hashtag berdasarkan gambar produk yang dilampirkan dan keterangan berikut: "{keterangan_produk}".
+                    
+                    Aturan:
+                    1. Judul: Singkat, sangat SEO friendly untuk pencarian Shopee, clickbait tapi relevan.
+                    2. Naskah: Bahasa gaul, persuasif, durasi baca santai sekitar 15-20 detik. Ada "Hook", sebut keunggulan produk, dan akhiri dengan Call to Action (CTA) "klik keranjang kuning".
+                    3. Hashtag: Buat persis 5 hashtag yang paling relevan dan berpotensi FYP di Shopee Video.
+                    
+                    PENTING: Kamu WAJIB mengembalikan jawaban dalam format struktur pembatas seperti di bawah ini, tanpa awalan atau akhiran teks lainnya:
+                    
+                    JUDUL:
+                    [Isi Judul Disini]
+                    ---
+                    NASKAH:
+                    [Isi Naskah Disini]
+                    ---
+                    HASHTAG:
+                    [Isi Hashtag Disini]
+                    """
+                    
+                    response = model.generate_content([prompt, img_to_analyze])
+                    hasil = response.text
+                    
+                    judul_ai, naskah_ai, hashtag_ai = "", hasil, ""
+                    if "---" in hasil:
+                        parts = hasil.split("---")
+                        if len(parts) >= 3:
+                            judul_ai = parts[0].replace("JUDUL:", "").strip()
+                            naskah_ai = parts[1].replace("NASKAH:", "").strip()
+                            hashtag_ai = parts[2].replace("HASHTAG:", "").strip()
+                    
+                    st.success("✅ SEO, Script, & Hashtag berhasil diracik!")
+                    
+                    if judul_ai:
+                        st.write("📌 **Judul Video (SEO Friendly):**")
+                        st.code(judul_ai, language="text")
+                        
+                    st.write("📝 **Naskah Voice Over:**")
+                    st.code(naskah_ai, language="text")
+                    
+                    if hashtag_ai:
+                        st.write("🏷️ **5 Hashtag Shopee Video:**")
+                        st.code(hashtag_ai, language="text")
+                    
+                except Exception as e:
+                    st.error(f"Gagal menghubungi Gemini AI. Error: {e}")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
-        for i in range(total_frames):
-            frame = background_base.copy()
-            zoom_factor = 1.0 + (0.08 * (i / total_frames))
-            curr_w = int(prod_w * zoom_factor)
-            curr_h = int(prod_h * zoom_factor)
-            img_zoomed = cv2.resize(img_product_static, (curr_w, curr_h))
-            
-            y_offset = (th - curr_h) // 2 - 50 
-            x_offset = (tw - curr_w) // 2
-            
-            y1, y2 = max(0, y_offset), min(th, y_offset + curr_h)
-            x1, x2 = max(0, x_offset), min(tw, x_offset + curr_w)
-            sy1, sy2 = max(0, -y_offset), min(curr_h, th - y_offset)
-            sx1, sx2 = max(0, -x_offset), min(curr_w, tw - x_offset)
-            
-            if y2 > y1 and x2 > x1:
-                frame[y1:y2, x1:x2] = img_zoomed[sy1:sy2, sx1:sx2]
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 3)
-
-            frame = add_text_to_image(frame, text_narration)
-            out.write(frame)
-            
-        out.release()
-        
-        final_v = f"clip_{index}.mp4"
-        subprocess.run([ffmpeg, '-y', '-i', tmp_v, '-i', audio_path, '-c:v', 'libx264', '-c:a', 'aac', '-shortest', final_v], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        if os.path.exists(tmp_v): os.remove(tmp_v)
-        if os.path.exists(audio_path): os.remove(audio_path)
-        
-        return final_v
-    except Exception as e:
-        print(f"Error frame: {e}")
-        return None
-
-# --- UI MAIN ---
-col1, col2 = st.columns([2, 1])
-with col1:
-    url = st.text_input("🔗 Link Shopee:", placeholder="Tempel link produk di sini...")
-with col2:
-    st.write("")
-    st.write("")
-    scrape_btn = st.button("🚀 PROSES PRODUK", type="primary", use_container_width=True)
-
-if 'shopee_data' not in st.session_state: st.session_state.shopee_data = None
-if 'generated_script' not in st.session_state: st.session_state.generated_script = None
-if 'is_manual_upload' not in st.session_state: st.session_state.is_manual_upload = False
-
-# --- LOGIKA SCRAPING ---
-if scrape_btn:
-    if url:
-        st.session_state.is_manual_upload = False
-        data, err = scrape_shopee_complete(url)
-        if data and data['images']:
-            st.session_state.shopee_data = data
-            st.session_state.generated_script = None
-            st.success(f"✅ Berhasil mengambil {len(data['images'])} gambar produk!")
-        else: 
-            st.error(f"❌ Gagal mengambil gambar dari Link. Gunakan opsi Upload Manual.")
-    else:
-        st.warning("Masukkan link dulu.")
-
-# --- FITUR UPLOAD MANUAL ---
+# --- TOMBOL RENDER FINAL ---
 st.markdown("---")
-with st.expander("📂 Opsi Cadangan: Upload Gambar Manual", expanded=True):
-    st.info("Jika link Shopee gagal, upload gambar dari HP/PC Anda di sini:")
-    uploaded_files = st.file_uploader("Upload Gambar Produk", type=['jpg', 'png', 'jpeg'], accept_multiple_files=True)
-    product_name_manual = st.text_input("Nama Produk:", value="Produk Viral")
+if uploaded_images and uploaded_audio:
+    st.success("✅ Foto dan Audio siap dirakit menjadi video!")
     
-    if uploaded_files:
-        if st.button("Gunakan Gambar Upload"):
-            st.session_state.shopee_data = {
-                "title": product_name_manual,
-                "images": uploaded_files, 
-                "description": ""
-            }
-            st.session_state.is_manual_upload = True
-            st.session_state.generated_script = None
-            st.success("✅ Gambar manual dimuat!")
-
-# --- EDITOR ---
-if st.session_state.shopee_data:
-    data = st.session_state.shopee_data
-    images_list = data['images']
-    limit = min(len(images_list), 6)
-    
-    if st.session_state.generated_script is None:
-        if api_key:
-            res_ai = generate_ai_script(api_key, data['title'], limit)
-            st.session_state.generated_script = res_ai if res_ai else [data['title']] * limit
-        else:
-            st.session_state.generated_script = [f"Produk: {data['title']}"] * limit
-
-    st.subheader(f"🎬 Video Editor: {data['title']}")
-    
-    cols = st.columns(3)
-    inputs = []
-    
-    for i in range(limit):
-        with cols[i%3]:
-            img_source = images_list[i]
-            if isinstance(img_source, str):
-                st.image(img_source, use_container_width=True)
-            else:
-                st.image(img_source, use_container_width=True)
-            
-            txt = st.text_area(f"Narasi {i+1}", value=st.session_state.generated_script[i] if i < len(st.session_state.generated_script) else "Cek sekarang!", key=f"v_{i}")
-            inputs.append({"img_source": img_source, "text": txt})
-
-    if st.button("✨ MULAI RENDER VIDEO", use_container_width=True):
-        clips = []
-        progress = st.progress(0)
-        st_status = st.empty()
-        
-        for i, item in enumerate(inputs):
-            st_status.text(f"Merender slide {i+1} dari {len(inputs)}...")
-            c = create_single_clip(
-                item['img_source'], 
-                item['text'], 
-                i, 
-                is_upload=st.session_state.is_manual_upload
-            )
-            if c: clips.append(c)
-            progress.progress((i+1)/len(inputs))
-        
-        if clips:
-            st_status.text("Menggabungkan video...")
-            with open("list.txt", "w") as f:
-                for c in clips: f.write(f"file '{c}'\n")
-            final_name = "shopee_video_final.mp4"
-            subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-y', '-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', final_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            st.video(final_name)
-            st.download_button("Download Video 📥", open(final_name, "rb"), "video.mp4")
-            
-            for c in clips: 
-                if os.path.exists(c): os.remove(c)
-            if os.path.exists("list.txt"): os.remove("list.txt")
-            st_status.text("Selesai!")
+    _, col_btn, _ = st.columns([1, 2, 1])
+    with col_btn:
+         if st.button("🚀 RENDER VIDEO ELEGAN SEKARANG 🚀", use_container_width=True):
+            with st.spinner('Sedang merender bingkai dan animasi... (Tunggu hingga selesai)'):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    image_paths = []
+                    for i, img_file in enumerate(uploaded_images):
+                        ext = os.path.splitext(img_file.name)[1]
+                        temp_path = os.path.join(temp_dir, f"img_{i}{ext}")
+                        
+                        img_file.seek(0) 
+                        with open(temp_path, "wb") as f:
+                            f.write(img_file.getbuffer())
+                        image_paths.append(temp_path)
+                    
+                    aud_ext = os.path.splitext(uploaded_audio.name)[1]
+                    audio_path = os.path.join(temp_dir, f"audio_source{aud_ext}")
+                    with open(audio_path, "wb") as f:
+                        f.write(uploaded_audio.getbuffer())
+                        
+                    output_path = os.path.join(temp_dir, "video_affiliate_elegan.mp4")
+                    
+                    sukses = generate_framed_video(image_paths, audio_path, output_path)
+                    
+                    if sukses:
+                        st.balloons()
+                        st.success("🎉 Video Katalog Elegan Selesai!")
+                        with open(output_path, 'rb') as video_file:
+                            video_bytes = video_file.read()
+                            st.video(video_bytes, format="video/mp4")
+                            st.download_button("⬇️ Download Video (Siap Upload)", data=video_bytes, file_name="affiliate_promo.mp4", mime="video/mp4", use_container_width=True)
