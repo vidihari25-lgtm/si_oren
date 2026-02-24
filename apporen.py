@@ -10,7 +10,6 @@ from PIL import Image
 st.set_page_config(page_title="Ultimate Affiliate Video & AI Script", page_icon="🛍️", layout="wide")
 
 # --- SESSION STATE (DAYA INGAT APLIKASI) ---
-# Ini penting agar teks AI tidak hilang dan file uploader bisa di-reset
 if 'reset_counter' not in st.session_state:
     st.session_state.reset_counter = 0
     st.session_state.ai_generated = False
@@ -42,9 +41,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🛍️ Shopee Affiliate: AI Video & Script Generator")
-st.markdown("Aplikasi pintar untuk afiliator: Buat naskah *voice over* otomatis dari foto dengan AI, lalu jadikan video katalog elegan berbingkai polaroid.")
+st.markdown("Aplikasi pintar untuk afiliator: Buat naskah *voice over* otomatis dari foto (dan screenshot spesifikasi) dengan AI, lalu jadikan video katalog elegan berbingkai polaroid.")
 
-# --- FUNGSI FFmpeg ---
+# --- FUNGSI FFmpeg (TIDAK DIUBAH SAMA SEKALI) ---
 def get_audio_duration(audio_path):
     try:
         cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audio_path]
@@ -113,10 +112,9 @@ def generate_framed_video(daftar_gambar, audio_path, nama_output):
 col_kiri, col_kanan = st.columns([1, 1], gap="large")
 
 with col_kiri:
-    st.header("📸 1. Input Material")
-    # File uploader menggunakan key dinamis agar bisa di-reset
+    st.header("📸 1. Input Material Video")
     uploaded_images = st.file_uploader(
-        "Upload Foto Produk (Minimal 2)", 
+        "Upload Foto Produk (Minimal 2 untuk video)", 
         type=['png', 'jpg', 'jpeg'], 
         accept_multiple_files=True,
         key=f"img_uploader_{st.session_state.reset_counter}"
@@ -142,10 +140,20 @@ with col_kanan:
         gemini_key = ""
         st.error("⚠️ API Key tidak ditemukan di Streamlit Secrets. Aplikasi tidak bisa men-generate script.")
 
+    # FITUR BARU: Uploader Screenshot (Maks 2)
+    st.markdown("**Bahan Bacaan AI (Opsional):**")
+    uploaded_captures = st.file_uploader(
+        "📄 Upload Screenshot Spesifikasi/Teks (Maks 2):", 
+        type=['png', 'jpg', 'jpeg'], 
+        accept_multiple_files=True,
+        key=f"cap_uploader_{st.session_state.reset_counter}",
+        help="AI akan membaca teks di dalam gambar ini (nama bahan, harga, fitur) jadi Anda tidak perlu mengetik manual."
+    )
+    
     keterangan_produk = st.text_area(
-        "📝 Keterangan Tambahan (Opsional):", 
-        placeholder="Misal: OOTD kondangan, bahan brokat premium, diskon 50%, free ongkir.",
-        height=100,
+        "📝 Keterangan Ketik Manual (Opsional):", 
+        placeholder="Atau ketik info tambahan di sini jika tidak ada screenshot...",
+        height=80,
         key=f"ket_{st.session_state.reset_counter}"
     )
     
@@ -153,36 +161,55 @@ with col_kanan:
         if not gemini_key:
             st.warning("⚠️ API Key belum disetting di Streamlit Cloud.")
         elif not uploaded_images:
-            st.warning("⚠️ Mohon upload foto produk di Langkah 1 agar AI bisa menganalisa gambarnya.")
+            st.warning("⚠️ Mohon upload foto produk di Langkah 1 agar AI bisa melihat produknya.")
         else:
-            with st.spinner("AI sedang meracik Judul SEO, Naskah, dan Hashtag..."):
+            with st.spinner("AI sedang membaca gambar, meracik Judul SEO, Naskah, dan Hashtag..."):
                 try:
                     genai.configure(api_key=gemini_key)
                     model = genai.GenerativeModel('gemini-2.0-flash')
-                    img_to_analyze = Image.open(uploaded_images[0])
                     
-                    prompt = f"""
+                    # Siapkan list konten untuk dikirim ke AI
+                    ai_payload = []
+                    
+                    # Prompt Instruksi
+                    prompt_text = f"""
                     Kamu adalah pakar SEO Shopee Video dan Copywriter Affiliate handal.
-                    Tugasmu adalah membuat Judul, Naskah Voice Over, dan Hashtag berdasarkan gambar produk yang dilampirkan dan keterangan berikut: "{keterangan_produk}".
+                    Tugasmu membuat Judul, Naskah Voice Over, dan Hashtag.
                     
-                    Aturan:
-                    1. Judul: Singkat, sangat SEO friendly untuk pencarian Shopee, clickbait tapi relevan.
-                    2. Naskah: Bahasa gaul, persuasif, durasi baca santai sekitar 15-20 detik. Ada "Hook", sebut keunggulan produk, dan akhiri dengan Call to Action (CTA) "klik keranjang kuning".
-                    3. Hashtag: Buat persis 5 hashtag yang paling relevan dan berpotensi FYP di Shopee Video.
+                    Bahan referensi:
+                    1. Gambar pertama yang dilampirkan adalah wujud produknya.
+                    2. Jika ada gambar kedua atau ketiga, itu adalah screenshot spesifikasi produk. BACA SEMUA TEKS di dalamnya secara teliti sebagai fitur/keunggulan produk.
+                    3. Catatan manual dari user: "{keterangan_produk}" (jika kosong, abaikan).
                     
-                    PENTING: Kamu WAJIB mengembalikan jawaban dalam format struktur pembatas seperti di bawah ini, tanpa awalan atau akhiran teks lainnya:
+                    Aturan Naskah:
+                    - Judul: Singkat, sangat SEO friendly, clickbait.
+                    - Naskah VO: Bahasa gaul, persuasif, durasi baca 15-20 detik. Ada Hook, sebut fitur unggulan (dari screenshot/catatan), dan akhiri dengan Call to Action "klik keranjang kuning".
+                    - Hashtag: 5 hashtag paling relevan.
                     
+                    PENTING: Jawab persis dengan format ini:
                     JUDUL:
-                    [Isi Judul Disini]
+                    [Isi Judul]
                     ---
                     NASKAH:
-                    [Isi Naskah Disini]
+                    [Isi Naskah]
                     ---
                     HASHTAG:
-                    [Isi Hashtag Disini]
+                    [Isi Hashtag]
                     """
+                    ai_payload.append(prompt_text)
                     
-                    response = model.generate_content([prompt, img_to_analyze])
+                    # Masukkan Foto Produk (Ambil 1 saja sebagai rupa visual)
+                    img_to_analyze = Image.open(uploaded_images[0])
+                    ai_payload.append(img_to_analyze)
+                    
+                    # Masukkan Gambar Screenshot (Maksimal 2 untuk hemat token)
+                    if uploaded_captures:
+                        for cap_file in uploaded_captures[:2]:
+                            cap_img = Image.open(cap_file)
+                            ai_payload.append(cap_img)
+                    
+                    # Generate Respon
+                    response = model.generate_content(ai_payload)
                     hasil = response.text
                     
                     judul_ai, naskah_ai, hashtag_ai = "", hasil, ""
@@ -193,7 +220,6 @@ with col_kanan:
                             naskah_ai = parts[1].replace("NASKAH:", "").strip()
                             hashtag_ai = parts[2].replace("HASHTAG:", "").strip()
                     
-                    # Simpan hasil ke dalam Session State (Daya Ingat)
                     st.session_state.judul_ai = judul_ai
                     st.session_state.naskah_ai = naskah_ai
                     st.session_state.hashtag_ai = hashtag_ai
@@ -204,8 +230,6 @@ with col_kanan:
                 except Exception as e:
                     st.error(f"Gagal menghubungi Gemini AI. Error: {e}")
     
-    # --- MENAMPILKAN HASIL AI DARI SESSION STATE ---
-    # Karena berada di luar tombol, teks ini tidak akan hilang saat render video
     if st.session_state.ai_generated:
         if st.session_state.judul_ai:
             st.write("📌 **Judul Video (SEO Friendly):**")
@@ -263,17 +287,23 @@ st.markdown("<br>", unsafe_allow_html=True)
 _, col_reset, _ = st.columns([1, 2, 1])
 
 with col_reset:
-    # GANTI kata 'kind' menjadi 'type' pada baris di bawah ini
+    st.markdown("""
+        <style>
+        div[data-testid="stButton"] button[kind="secondary"] {
+            background-color: #4f4f4f;
+            color: white;
+            border: none;
+        }
+        div[data-testid="stButton"] button[kind="secondary"]:hover {
+            background-color: #cc0000;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
     if st.button("🗑️ HAPUS DATA & BUAT PRODUK BARU", type="secondary", use_container_width=True):
-        # Tambah counter untuk me-reset tampilan uploader file
         st.session_state.reset_counter += 1
-        
-        # Bersihkan ingatan AI
         st.session_state.ai_generated = False
         st.session_state.judul_ai = ""
         st.session_state.naskah_ai = ""
         st.session_state.hashtag_ai = ""
-        
-        # Perintahkan Streamlit untuk memuat ulang halaman secara paksa
         st.rerun()
-
