@@ -43,10 +43,9 @@ st.markdown("""
 st.title("🛍️ Shopee Affiliate: AI Video & Script Generator")
 st.markdown("Aplikasi pintar untuk afiliator: Buat naskah *voice over* otomatis dari foto/screenshot dengan AI, lalu jadikan video katalog elegan berbingkai polaroid.")
 
-# --- FUNGSI FFmpeg (VAKSIN ANTI-SPASI SEJATI) ---
+# --- FUNGSI FFmpeg (TIDAK DIUBAH SAMA SEKALI) ---
 def get_audio_duration(temp_dir, audio_filename):
     try:
-        # PERINTAH KUNCI: cwd=temp_dir (memaksa mesin mengeksekusi di dalam folder, menghindari spasi path Windows)
         cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audio_filename]
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True, cwd=temp_dir)
         return float(result.stdout.strip())
@@ -73,7 +72,6 @@ def generate_framed_video(temp_dir, media_filenames, audio_filename, output_file
 
     cmd = ['ffmpeg', '-y']
     
-    # Memasukkan input media (Hanya menggunakan nama file pendek, bukan full path)
     for media in media_filenames:
         ext = os.path.splitext(media)[1].lower()
         if ext in ['.mp4', '.mov', '.avi']:
@@ -119,7 +117,6 @@ def generate_framed_video(temp_dir, media_filenames, audio_filename, output_file
     cmd.extend(['-c:v', 'libx264', '-preset', 'superfast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-r', '30', '-shortest', output_filename])
     
     try:
-        # PERINTAH KUNCI: cwd=temp_dir. FFmpeg dieksekusi terkurung di dalam folder.
         subprocess.run(cmd, check=True, stderr=subprocess.PIPE, cwd=temp_dir) 
         return True
     except subprocess.CalledProcessError as e:
@@ -143,9 +140,11 @@ with col_kiri:
     st.markdown("---")
     st.header("🎵 3. Upload Voice/Musik")
     st.info("Setelah men-generate script di samping dan mengubahnya jadi suara, upload file audionya ke sini.")
+    
+    # REVISI KUNCI: Menghapus batas "type" agar HP Android tidak memblokir file hasil download
     uploaded_audio = st.file_uploader(
-        "Upload Audio (MP3/WAV)", 
-        type=['mp3', 'wav', 'WAV', 'm4a', 'aac', 'ogg'],
+        "Upload Audio (Abaikan jika icon abu-abu di HP, tetap bisa dipilih)", 
+        accept_multiple_files=False,
         key=f"aud_uploader_{st.session_state.reset_counter}"
     )
 
@@ -281,7 +280,6 @@ if uploaded_media and uploaded_audio:
                 with tempfile.TemporaryDirectory() as temp_dir:
                     media_filenames = []
                     for i, media_file in enumerate(uploaded_media):
-                        # Ekstrak nama asli, buang karakter aneh/spasi
                         ext = os.path.splitext(media_file.name)[1].lower()
                         safe_ext = "".join(c for c in ext if c.isalnum() or c == '.')
                         
@@ -293,12 +291,8 @@ if uploaded_media and uploaded_audio:
                             f.write(media_file.getbuffer())
                         media_filenames.append(media_filename)
                     
-                    aud_ext = os.path.splitext(uploaded_audio.name)[1].lower()
-                    safe_aud_ext = "".join(c for c in aud_ext if c.isalnum() or c == '.')
-                    if not safe_aud_ext:
-                        safe_aud_ext = ".wav" 
-                        
-                    audio_filename = f"audio_source{safe_aud_ext}"
+                    # LOGIKA SAPU JAGAT: Apapun nama dan jenis filenya, paksa jadi file .wav
+                    audio_filename = "audio_source.wav"
                     audio_path = os.path.join(temp_dir, audio_filename)
                     with open(audio_path, "wb") as f:
                         f.write(uploaded_audio.getbuffer())
