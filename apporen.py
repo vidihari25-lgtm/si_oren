@@ -43,7 +43,7 @@ st.markdown("""
 st.title("🛍️ Shopee Affiliate: AI Video & Script Generator")
 st.markdown("Aplikasi pintar untuk afiliator: Buat naskah *voice over* otomatis dari foto/screenshot dengan AI, lalu jadikan video katalog elegan berbingkai polaroid.")
 
-# --- FUNGSI FFmpeg (KEBAL SPASI & ANTI-BEKU) ---
+# --- FUNGSI FFmpeg (KEBAL SPASI, ANTI-BEKU, & TURBO RENDER) ---
 def get_audio_duration(audio_path):
     try:
         folder = os.path.dirname(audio_path)
@@ -90,16 +90,15 @@ def generate_framed_video(daftar_media, audio_path, nama_output):
         ext = os.path.splitext(media_filenames[i])[1].lower()
         is_video = ext in ['.mp4', '.mov', '.avi']
 
-        # REVISI KUNCI: Membelah (split) jalur video jadi dua (in_bg dan in_fg) agar tidak tabrakan/beku
         filter_complex += f"[{i}:v]split=2[in_bg{i}][in_fg{i}]; "
         
-        # Layer 1: Background menggunakan hasil belahan pertama (in_bg)
-        filter_complex += f"[in_bg{i}]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=150:150[bg{i}]; "
+        # REVISI KUNCI (TURBO BLUR): 
+        # Alih-alih boxblur=150:150 yang bikin PC meledak, kita kecilkan ke resolusi 270x480 -> blur ringan 15:15 -> besarkan lagi ke 1080x1920
+        # Efek visualnya persis sama (sangat buram), tapi kecepatannya naik drastis!
+        filter_complex += f"[in_bg{i}]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,scale=270:480,boxblur=15:15,scale=1080:1920[bg{i}]; "
         
-        # Layer 2: Foreground menggunakan hasil belahan kedua (in_fg)
+        # Layer 2: Foreground (Bingkai) - Tidak diubah
         filter_complex += f"[in_fg{i}]scale=850:1800:force_original_aspect_ratio=decrease[fg_raw{i}]; "
-        
-        # Sisa proses tetap sama seperti aslinya
         filter_complex += f"[fg_raw{i}]pad=iw+80:ih+80:40:40:white[framed_fg{i}]; "
         filter_complex += f"[bg{i}][framed_fg{i}]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[comp{i}]; "
         
@@ -124,7 +123,9 @@ def generate_framed_video(daftar_media, audio_path, nama_output):
     filter_complex = filter_complex.strip("; ")
     audio_index = len(daftar_media)
     cmd.extend(['-filter_complex', filter_complex, '-map', '[outv]', '-map', f'{audio_index}:a'])
-    cmd.extend(['-c:v', 'libx264', '-preset', 'fast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-r', '30', '-shortest', output_filename])
+    
+    # TAMBAHAN TURBO: Menggunakan preset 'superfast' untuk memotong waktu antrean render tanpa mengurangi kualitas secara kasat mata
+    cmd.extend(['-c:v', 'libx264', '-preset', 'superfast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-r', '30', '-shortest', output_filename])
     
     try:
         subprocess.run(cmd, check=True, stderr=subprocess.PIPE, cwd=folder) 
