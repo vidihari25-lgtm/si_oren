@@ -43,7 +43,7 @@ st.markdown("""
 st.title("🛍️ Shopee Affiliate: AI Video & Script Generator")
 st.markdown("Aplikasi pintar untuk afiliator: Buat naskah *voice over* otomatis dari foto/screenshot dengan AI, lalu jadikan video katalog elegan berbingkai polaroid.")
 
-# --- FUNGSI FFmpeg (KEBAL SPASI & CERDAS BACA VIDEO) ---
+# --- FUNGSI FFmpeg (KEBAL SPASI & ANTI-BEKU) ---
 def get_audio_duration(audio_path):
     try:
         folder = os.path.dirname(audio_path)
@@ -87,21 +87,25 @@ def generate_framed_video(daftar_media, audio_path, nama_output):
 
     filter_complex = ""
     for i in range(jumlah_media):
-        # Deteksi apakah material ke-[i] ini foto atau video
         ext = os.path.splitext(media_filenames[i])[1].lower()
         is_video = ext in ['.mp4', '.mov', '.avi']
 
-        filter_complex += f"[{i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=150:150[bg{i}]; "
-        filter_complex += f"[{i}:v]scale=850:1800:force_original_aspect_ratio=decrease[fg_raw{i}]; "
+        # REVISI KUNCI: Membelah (split) jalur video jadi dua (in_bg dan in_fg) agar tidak tabrakan/beku
+        filter_complex += f"[{i}:v]split=2[in_bg{i}][in_fg{i}]; "
+        
+        # Layer 1: Background menggunakan hasil belahan pertama (in_bg)
+        filter_complex += f"[in_bg{i}]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=150:150[bg{i}]; "
+        
+        # Layer 2: Foreground menggunakan hasil belahan kedua (in_fg)
+        filter_complex += f"[in_fg{i}]scale=850:1800:force_original_aspect_ratio=decrease[fg_raw{i}]; "
+        
+        # Sisa proses tetap sama seperti aslinya
         filter_complex += f"[fg_raw{i}]pad=iw+80:ih+80:40:40:white[framed_fg{i}]; "
         filter_complex += f"[bg{i}][framed_fg{i}]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[comp{i}]; "
         
-        # PERBAIKAN LOGIKA: Rambu Lalu Lintas Animasi
         if is_video:
-            # Jika Video: JANGAN di-zoompan agar tidak beku. Biarkan berputar normal di 30fps.
             filter_complex += f"[comp{i}]fps=30,scale=1080:1920[scene{i}]; "
         else:
-            # Jika Foto: Mainkan zoompan pelan agar fotonya terlihat hidup.
             filter_complex += f"[comp{i}]zoompan=z='min(zoom+0.0002,1.06)':d={frames_per_media+90}:s=1080x1920:fps=30[scene{i}]; "
 
     if jumlah_media == 1:
