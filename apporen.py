@@ -43,24 +43,18 @@ st.markdown("""
 st.title("🛍️ Shopee Affiliate: AI Video & Script Generator")
 st.markdown("Aplikasi pintar untuk afiliator: Buat naskah *voice over* otomatis dari foto/screenshot dengan AI, lalu jadikan video katalog elegan berbingkai polaroid.")
 
-# --- FUNGSI FFmpeg (KEBAL SPASI, ANTI-BEKU, & TURBO RENDER) ---
+# --- FUNGSI FFmpeg (FUNGSI ASLI, AMAN DARI SPASI) ---
 def get_audio_duration(audio_path):
     try:
-        folder = os.path.dirname(audio_path)
-        filename = os.path.basename(audio_path)
-        cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filename]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True, cwd=folder)
+        # Menggunakan absolute path langsung, Python subprocess otomatis mengamankan spasi
+        cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audio_path]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
         return float(result.stdout.strip())
     except Exception as e:
-        st.error(f"Gagal membaca durasi audio. Error: {e}")
+        st.error(f"Gagal membaca durasi audio. Pastikan file tidak rusak. Error: {e}")
         return 0.0
 
 def generate_framed_video(daftar_media, audio_path, nama_output):
-    folder = os.path.dirname(audio_path)
-    audio_filename = os.path.basename(audio_path)
-    output_filename = os.path.basename(nama_output)
-    media_filenames = [os.path.basename(m) for m in daftar_media]
-
     jumlah_media = len(daftar_media)
     audio_duration = get_audio_duration(audio_path)
     if audio_duration == 0: return False
@@ -76,32 +70,30 @@ def generate_framed_video(daftar_media, audio_path, nama_output):
 
     cmd = ['ffmpeg', '-y']
     
-    for media in media_filenames:
+    for media in daftar_media:
         ext = os.path.splitext(media)[1].lower()
         if ext in ['.mp4', '.mov', '.avi']:
             cmd.extend(['-stream_loop', '-1', '-t', str(durasi_per_media + input_padding), '-i', media])
         else:
             cmd.extend(['-loop', '1', '-t', str(durasi_per_media + input_padding), '-i', media])
             
-    cmd.extend(['-i', audio_filename])
+    cmd.extend(['-i', audio_path])
 
     filter_complex = ""
     for i in range(jumlah_media):
-        ext = os.path.splitext(media_filenames[i])[1].lower()
+        ext = os.path.splitext(daftar_media[i])[1].lower()
         is_video = ext in ['.mp4', '.mov', '.avi']
 
         filter_complex += f"[{i}:v]split=2[in_bg{i}][in_fg{i}]; "
         
-        # REVISI KUNCI (TURBO BLUR): 
-        # Alih-alih boxblur=150:150 yang bikin PC meledak, kita kecilkan ke resolusi 270x480 -> blur ringan 15:15 -> besarkan lagi ke 1080x1920
-        # Efek visualnya persis sama (sangat buram), tapi kecepatannya naik drastis!
+        # TURBO RENDER: Downscale -> Blur -> Upscale
         filter_complex += f"[in_bg{i}]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,scale=270:480,boxblur=15:15,scale=1080:1920[bg{i}]; "
         
-        # Layer 2: Foreground (Bingkai) - Tidak diubah
         filter_complex += f"[in_fg{i}]scale=850:1800:force_original_aspect_ratio=decrease[fg_raw{i}]; "
         filter_complex += f"[fg_raw{i}]pad=iw+80:ih+80:40:40:white[framed_fg{i}]; "
         filter_complex += f"[bg{i}][framed_fg{i}]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[comp{i}]; "
         
+        # ANTI-BEKU VIDEO
         if is_video:
             filter_complex += f"[comp{i}]fps=30,scale=1080:1920[scene{i}]; "
         else:
@@ -124,11 +116,11 @@ def generate_framed_video(daftar_media, audio_path, nama_output):
     audio_index = len(daftar_media)
     cmd.extend(['-filter_complex', filter_complex, '-map', '[outv]', '-map', f'{audio_index}:a'])
     
-    # TAMBAHAN TURBO: Menggunakan preset 'superfast' untuk memotong waktu antrean render tanpa mengurangi kualitas secara kasat mata
-    cmd.extend(['-c:v', 'libx264', '-preset', 'superfast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-r', '30', '-shortest', output_filename])
+    # TURBO RENDER PRESET
+    cmd.extend(['-c:v', 'libx264', '-preset', 'superfast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-r', '30', '-shortest', nama_output])
     
     try:
-        subprocess.run(cmd, check=True, stderr=subprocess.PIPE, cwd=folder) 
+        subprocess.run(cmd, check=True, stderr=subprocess.PIPE) 
         return True
     except subprocess.CalledProcessError as e:
         error_message = e.stderr.decode('utf-8') if e.stderr else str(e)
@@ -153,7 +145,7 @@ with col_kiri:
     st.info("Setelah men-generate script di samping dan mengubahnya jadi suara, upload file audionya ke sini.")
     uploaded_audio = st.file_uploader(
         "Upload Audio (MP3/WAV)", 
-        type=['mp3', 'wav', 'WAV', 'm4a', 'aac', 'ogg'],
+        type=['mp3', 'wav', 'm4a', 'aac', 'ogg'],
         key=f"aud_uploader_{st.session_state.reset_counter}"
     )
 
@@ -208,7 +200,7 @@ with col_kanan:
                     
                     Aturan Naskah:
                     - Judul: Singkat, sangat SEO friendly, clickbait.
-                    - Naskah VO: Bahasa gaul, persuasif, durasi baca 15-20 detik. Ada Hook, sebut fitur unggulan (dari screenshot/catatan), dan akhiri dengan Call to Action "klik keranjang dibawah ya".
+                    - Naskah VO: Bahasa gaul, persuasif, durasi baca 15-20 detik. Ada Hook, sebut fitur unggulan (dari screenshot/catatan), dan akhiri dengan Call to Action "klik keranjang kuning".
                     - Hashtag: 5 hashtag paling relevan.
                     
                     PENTING: Jawab persis dengan format ini:
@@ -289,16 +281,23 @@ if uploaded_media and uploaded_audio:
                 with tempfile.TemporaryDirectory() as temp_dir:
                     media_paths = []
                     for i, media_file in enumerate(uploaded_media):
-                        ext = os.path.splitext(media_file.name)[1].strip().replace(" ", "")
-                        temp_path = os.path.join(temp_dir, f"media_{i}{ext}")
+                        # PEMBERSIHAN NAMA FILE SUPER KETAT
+                        ext = os.path.splitext(media_file.name)[1].lower()
+                        safe_ext = "".join(c for c in ext if c.isalnum() or c == '.')
+                        temp_path = os.path.join(temp_dir, f"media_{i}{safe_ext}")
                         
                         media_file.seek(0) 
                         with open(temp_path, "wb") as f:
                             f.write(media_file.getbuffer())
                         media_paths.append(temp_path)
                     
-                    aud_ext = os.path.splitext(uploaded_audio.name)[1].strip().replace(" ", "")
-                    audio_path = os.path.join(temp_dir, f"audio_source{aud_ext}")
+                    # PEMBERSIHAN NAMA AUDIO SUPER KETAT
+                    aud_ext = os.path.splitext(uploaded_audio.name)[1].lower()
+                    safe_aud_ext = "".join(c for c in aud_ext if c.isalnum() or c == '.')
+                    if not safe_aud_ext:
+                        safe_aud_ext = ".wav" # Jaga-jaga jika ekstensi kosong
+                        
+                    audio_path = os.path.join(temp_dir, f"audio_source{safe_aud_ext}")
                     with open(audio_path, "wb") as f:
                         f.write(uploaded_audio.getbuffer())
                         
@@ -340,4 +339,3 @@ with col_reset:
         st.session_state.naskah_ai = ""
         st.session_state.hashtag_ai = ""
         st.rerun()
-
