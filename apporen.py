@@ -208,7 +208,7 @@ with col_kanan:
                     
                     Aturan Naskah:
                     - Judul: Singkat, sangat SEO friendly, clickbait.
-                    - Naskah VO: Bahasa gaul, persuasif, durasi baca 15-20 detik. Ada Hook, sebut fitur unggulan (dari screenshot/catatan), dan akhiri dengan Call to Action "klik keranjang kuning".
+                    - Naskah VO: Bahasa gaul, persuasif, durasi baca 15-20 detik. Ada Hook, sebut fitur unggulan (dari screenshot/catatan), dan akhiri dengan Call to Action "klik keranjang dibawah ya".
                     - Hashtag: 5 hashtag paling relevan.
                     
                     PENTING: Jawab persis dengan format ini:
@@ -340,3 +340,4 @@ with col_reset:
         st.session_state.naskah_ai = ""
         st.session_state.hashtag_ai = ""
         st.rerun()
+
