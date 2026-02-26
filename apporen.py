@@ -43,17 +43,24 @@ st.markdown("""
 st.title("🛍️ Shopee Affiliate: AI Video & Script Generator")
 st.markdown("Aplikasi pintar untuk afiliator: Buat naskah *voice over* otomatis dari foto/screenshot dengan AI, lalu jadikan video katalog elegan berbingkai polaroid.")
 
-# --- FUNGSI FFmpeg ---
+# --- FUNGSI FFmpeg (KEBAL SPASI & CERDAS BACA VIDEO) ---
 def get_audio_duration(audio_path):
     try:
-        cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audio_path]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        folder = os.path.dirname(audio_path)
+        filename = os.path.basename(audio_path)
+        cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filename]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True, cwd=folder)
         return float(result.stdout.strip())
     except Exception as e:
         st.error(f"Gagal membaca durasi audio. Error: {e}")
         return 0.0
 
 def generate_framed_video(daftar_media, audio_path, nama_output):
+    folder = os.path.dirname(audio_path)
+    audio_filename = os.path.basename(audio_path)
+    output_filename = os.path.basename(nama_output)
+    media_filenames = [os.path.basename(m) for m in daftar_media]
+
     jumlah_media = len(daftar_media)
     audio_duration = get_audio_duration(audio_path)
     if audio_duration == 0: return False
@@ -69,26 +76,33 @@ def generate_framed_video(daftar_media, audio_path, nama_output):
 
     cmd = ['ffmpeg', '-y']
     
-    # PERUBAHAN CERDAS: Membedakan cara input untuk Foto vs Video
-    for media in daftar_media:
+    for media in media_filenames:
         ext = os.path.splitext(media)[1].lower()
         if ext in ['.mp4', '.mov', '.avi']:
-            # Jika video: gunakan -stream_loop agar video berulang jika durasinya kurang
             cmd.extend(['-stream_loop', '-1', '-t', str(durasi_per_media + input_padding), '-i', media])
         else:
-            # Jika gambar: gunakan -loop 1 standar
             cmd.extend(['-loop', '1', '-t', str(durasi_per_media + input_padding), '-i', media])
             
-    cmd.extend(['-i', audio_path])
+    cmd.extend(['-i', audio_filename])
 
     filter_complex = ""
     for i in range(jumlah_media):
+        # Deteksi apakah material ke-[i] ini foto atau video
+        ext = os.path.splitext(media_filenames[i])[1].lower()
+        is_video = ext in ['.mp4', '.mov', '.avi']
+
         filter_complex += f"[{i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=150:150[bg{i}]; "
         filter_complex += f"[{i}:v]scale=850:1800:force_original_aspect_ratio=decrease[fg_raw{i}]; "
         filter_complex += f"[fg_raw{i}]pad=iw+80:ih+80:40:40:white[framed_fg{i}]; "
         filter_complex += f"[bg{i}][framed_fg{i}]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[comp{i}]; "
-        # Animasi zoompan tetap dipakai untuk foto maupun video agar frame-nya ikut bergerak elegan
-        filter_complex += f"[comp{i}]zoompan=z='min(zoom+0.0002,1.06)':d={frames_per_media+90}:s=1080x1920:fps=30[scene{i}]; "
+        
+        # PERBAIKAN LOGIKA: Rambu Lalu Lintas Animasi
+        if is_video:
+            # Jika Video: JANGAN di-zoompan agar tidak beku. Biarkan berputar normal di 30fps.
+            filter_complex += f"[comp{i}]fps=30,scale=1080:1920[scene{i}]; "
+        else:
+            # Jika Foto: Mainkan zoompan pelan agar fotonya terlihat hidup.
+            filter_complex += f"[comp{i}]zoompan=z='min(zoom+0.0002,1.06)':d={frames_per_media+90}:s=1080x1920:fps=30[scene{i}]; "
 
     if jumlah_media == 1:
         filter_complex += "[scene0]copy[outv]"
@@ -106,10 +120,10 @@ def generate_framed_video(daftar_media, audio_path, nama_output):
     filter_complex = filter_complex.strip("; ")
     audio_index = len(daftar_media)
     cmd.extend(['-filter_complex', filter_complex, '-map', '[outv]', '-map', f'{audio_index}:a'])
-    cmd.extend(['-c:v', 'libx264', '-preset', 'fast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-r', '30', '-shortest', nama_output])
+    cmd.extend(['-c:v', 'libx264', '-preset', 'fast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-r', '30', '-shortest', output_filename])
     
     try:
-        subprocess.run(cmd, check=True, stderr=subprocess.PIPE) 
+        subprocess.run(cmd, check=True, stderr=subprocess.PIPE, cwd=folder) 
         return True
     except subprocess.CalledProcessError as e:
         error_message = e.stderr.decode('utf-8') if e.stderr else str(e)
@@ -122,7 +136,6 @@ col_kiri, col_kanan = st.columns([1, 1], gap="large")
 
 with col_kiri:
     st.header("📸 1. Input Material Video")
-    # PERUBAHAN: Sekarang menerima file video (mp4, mov, avi)
     uploaded_media = st.file_uploader(
         "Upload Foto / Video Produk (Minimal 2 file)", 
         type=['png', 'jpg', 'jpeg', 'mp4', 'mov', 'avi'], 
@@ -133,7 +146,6 @@ with col_kiri:
     st.markdown("---")
     st.header("🎵 3. Upload Voice/Musik")
     st.info("Setelah men-generate script di samping dan mengubahnya jadi suara, upload file audionya ke sini.")
-    # PERUBAHAN: Memperkuat deteksi ekstensi audio .wav dan huruf kapitalnya
     uploaded_audio = st.file_uploader(
         "Upload Audio (MP3/WAV)", 
         type=['mp3', 'wav', 'WAV', 'm4a', 'aac', 'ogg'],
@@ -191,7 +203,7 @@ with col_kanan:
                     
                     Aturan Naskah:
                     - Judul: Singkat, sangat SEO friendly, clickbait.
-                    - Naskah VO: Bahasa gaul, persuasif, durasi baca 15-20 detik. Ada Hook, sebut fitur unggulan (dari screenshot/catatan), dan akhiri dengan Call to Action "klik keranjang dibawah".
+                    - Naskah VO: Bahasa gaul, persuasif, durasi baca 15-20 detik. Ada Hook, sebut fitur unggulan (dari screenshot/catatan), dan akhiri dengan Call to Action "klik keranjang kuning".
                     - Hashtag: 5 hashtag paling relevan.
                     
                     PENTING: Jawab persis dengan format ini:
@@ -206,25 +218,22 @@ with col_kanan:
                     """
                     ai_payload.append(prompt_text)
                     
-                    # LOGIKA PINTAR: Cari 1 foto dari material untuk AI (AI tidak bisa baca video langsung)
                     img_to_analyze = None
                     if uploaded_media:
                         for media_file in uploaded_media:
                             ext = os.path.splitext(media_file.name)[1].lower()
                             if ext in ['.png', '.jpg', '.jpeg']:
                                 img_to_analyze = Image.open(media_file)
-                                break # Cukup ambil 1 gambar pertama
+                                break 
                     
                     if img_to_analyze:
                         ai_payload.append(img_to_analyze)
                     
-                    # Masukkan Screenshot Spesifikasi
                     if uploaded_captures:
                         for cap_file in uploaded_captures[:2]:
                             cap_img = Image.open(cap_file)
                             ai_payload.append(cap_img)
                     
-                    # Pastikan minimal ada 1 gambar/teks untuk dikirim
                     if len(ai_payload) > 1 or keterangan_produk.strip() != "":
                         response = model.generate_content(ai_payload)
                         hasil = response.text
@@ -265,7 +274,6 @@ with col_kanan:
 
 # --- TOMBOL RENDER FINAL ---
 st.markdown("---")
-# Tombol render akan muncul jika ada material (foto/video) DAN audio
 if uploaded_media and uploaded_audio:
     st.success("✅ File lengkap! Siap dirakit menjadi video.")
     
@@ -276,7 +284,7 @@ if uploaded_media and uploaded_audio:
                 with tempfile.TemporaryDirectory() as temp_dir:
                     media_paths = []
                     for i, media_file in enumerate(uploaded_media):
-                        ext = os.path.splitext(media_file.name)[1]
+                        ext = os.path.splitext(media_file.name)[1].strip().replace(" ", "")
                         temp_path = os.path.join(temp_dir, f"media_{i}{ext}")
                         
                         media_file.seek(0) 
@@ -284,7 +292,7 @@ if uploaded_media and uploaded_audio:
                             f.write(media_file.getbuffer())
                         media_paths.append(temp_path)
                     
-                    aud_ext = os.path.splitext(uploaded_audio.name)[1]
+                    aud_ext = os.path.splitext(uploaded_audio.name)[1].strip().replace(" ", "")
                     audio_path = os.path.join(temp_dir, f"audio_source{aud_ext}")
                     with open(audio_path, "wb") as f:
                         f.write(uploaded_audio.getbuffer())
@@ -327,4 +335,3 @@ with col_reset:
         st.session_state.naskah_ai = ""
         st.session_state.hashtag_ai = ""
         st.rerun()
-
